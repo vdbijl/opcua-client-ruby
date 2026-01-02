@@ -1,5 +1,13 @@
 # opcua-client-ruby
 
+WIP. Note from vdbijl. There are not many options to interact with OPC UA servers in Ruby. This is one of them. The other is opcua-smart, but I have some trouble getting it to work.
+I am trying to see if it's worthwile to extend this client with more functionality.
+
+My wishlist:
+* support for reading and writing all, or the mostly used, data types
+* support for detection of objects on the server
+
+
 Incomplete OPC-UA client library for Ruby. Wraps open62541: <https://open62541.org>.
 
 ![ci-badge](https://github.com/mak-it/opcua-client-ruby/actions/workflows/build.yml/badge.svg)
