@@ -608,6 +608,12 @@ static VALUE rb_writeUaValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_
         value.data = UA_malloc(sizeof(UA_Boolean));
         *(UA_Boolean*)value.data = newValue;
         value.type = &UA_TYPES[UA_TYPES_BOOLEAN];
+    } else if (uaType == UA_TYPES_STRING) {
+        char *str = StringValueCStr(v_newValue);
+        UA_String *uaString = UA_malloc(sizeof(UA_String));
+        *uaString = UA_STRING_ALLOC(str);
+        value.data = uaString;
+        value.type = &UA_TYPES[UA_TYPES_STRING];
     } else {
         rb_raise(cError, "Unsupported type");
     }
@@ -676,6 +682,10 @@ static VALUE rb_writeFloatValues(VALUE self, VALUE v_nsIndex, VALUE v_aryNames, 
     return rb_writeUaValues(self, v_nsIndex, v_aryNames, v_aryNewValues, UA_TYPES_FLOAT);
 }
 
+static VALUE rb_writeStringValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_newValue) {
+    return rb_writeUaValue(self, v_nsIndex, v_name, v_newValue, UA_TYPES_STRING);
+}
+
 static VALUE rb_readUaValue(VALUE self, VALUE v_nsIndex, VALUE v_name, int type) {
     if (RB_TYPE_P(v_name, T_STRING) != 1) {
         return raise_invalid_arguments_error();
@@ -726,6 +736,9 @@ static VALUE rb_readUaValue(VALUE self, VALUE v_nsIndex, VALUE v_name, int type)
     } else if (type == UA_TYPES_FLOAT && UA_Variant_hasScalarType(&value, &UA_TYPES[UA_TYPES_FLOAT])) {
         UA_Float val =*(UA_Float*)value.data;
         result = DBL2NUM(val);
+    } else if (type == UA_TYPES_STRING && UA_Variant_hasScalarType(&value, &UA_TYPES[UA_TYPES_STRING])) {
+        UA_String *val = (UA_String*)value.data;
+        result = rb_str_new((char*)val->data, val->length);
     } else {
         rb_raise(cError, "UA type mismatch");
         return Qnil;
@@ -759,6 +772,10 @@ static VALUE rb_readBooleanValue(VALUE self, VALUE v_nsIndex, VALUE v_name) {
 
 static VALUE rb_readFloatValue(VALUE self, VALUE v_nsIndex, VALUE v_name) {
     return rb_readUaValue(self, v_nsIndex, v_name, UA_TYPES_FLOAT);
+}
+
+static VALUE rb_readStringValue(VALUE self, VALUE v_nsIndex, VALUE v_name) {
+    return rb_readUaValue(self, v_nsIndex, v_name, UA_TYPES_STRING);
 }
 
 static VALUE rb_get_human_UA_StatusCode(VALUE self, VALUE v_code) {
@@ -849,6 +866,7 @@ void Init_opcua_client()
     rb_define_method(cClient, "read_float", rb_readFloatValue, 2);
     rb_define_method(cClient, "read_boolean", rb_readBooleanValue, 2);
     rb_define_method(cClient, "read_bool", rb_readBooleanValue, 2);
+    rb_define_method(cClient, "read_string", rb_readStringValue, 2);
 
     rb_define_method(cClient, "write_int16", rb_writeInt16Value, 3);
     rb_define_method(cClient, "write_uint16", rb_writeUInt16Value, 3);
@@ -857,6 +875,7 @@ void Init_opcua_client()
     rb_define_method(cClient, "write_float", rb_writeFloatValue, 3);
     rb_define_method(cClient, "write_boolean", rb_writeBooleanValue, 3);
     rb_define_method(cClient, "write_bool", rb_writeBooleanValue, 3);
+    rb_define_method(cClient, "write_string", rb_writeStringValue, 3);
 
     rb_define_method(cClient, "multi_write_int16", rb_writeInt16Values, 3);
     rb_define_method(cClient, "multi_write_uint16", rb_writeUInt16Values, 3);
