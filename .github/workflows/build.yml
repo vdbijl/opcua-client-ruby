@@ -1,4 +1,4 @@
-name: Build
+name: Build and Test
 on: [push, pull_request]
 jobs:
   build:
@@ -18,12 +18,21 @@ jobs:
           - '2.5'
           - '2.4'
       fail-fast: false
-    env:
-      BUNDLE_WITHOUT: development
     steps:
       - uses: actions/checkout@v3
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true # runs 'bundle install' and caches installed gems automatically
-      - run: bin/rake spec
+
+      # Build test server (Linux only)
+      - name: Build test server
+        if: runner.os == 'Linux'
+        run: |
+          cd tools/server
+          make clean
+          make
+
+      # Run full test suite (compile, rubocop, rspec)
+      - name: Run tests
+        run: bundle exec rake
