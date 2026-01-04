@@ -1,0 +1,11 @@
+plugins:
+    - rubocop-rspec
+    - rubocop-performance
+    - rubocop-rake
+
+AllCops:
+  Exclude:
+    - 'bin/**/*'
+    - 'ext/**/*'
+    - 'tools/**/*'
+  NewCops: enable

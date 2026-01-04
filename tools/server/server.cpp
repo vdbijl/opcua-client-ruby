@@ -14,21 +14,34 @@ static UA_NodeId addVariableUnder(UA_Server *server, UA_Int16 nsId, int type, co
 
     UA_VariableAttributes attr = UA_VariableAttributes_default;
 
-    if (type == UA_TYPES_INT32) {
+    if (type == UA_TYPES_BYTE) {
+        UA_Byte initialValue = *(UA_Byte*)defaultValue;
+        UA_Variant_setScalarCopy(&attr.value, &initialValue, &UA_TYPES[type]);
+    } else if (type == UA_TYPES_INT32) {
         UA_Int32 initialValue = *(UA_Int32*)defaultValue;
-        UA_Variant_setScalar(&attr.value, &initialValue, &UA_TYPES[type]);
+        UA_Variant_setScalarCopy(&attr.value, &initialValue, &UA_TYPES[type]);
     } else if (type == UA_TYPES_INT16) {
         UA_Int16 initialValue = *(UA_Int16*)defaultValue;
-        UA_Variant_setScalar(&attr.value, &initialValue, &UA_TYPES[type]);
+        UA_Variant_setScalarCopy(&attr.value, &initialValue, &UA_TYPES[type]);
     } else if (type == UA_TYPES_UINT16) {
         UA_UInt16 initialValue = *(UA_UInt16*)defaultValue;
-        UA_Variant_setScalar(&attr.value, &initialValue, &UA_TYPES[type]);
+        UA_Variant_setScalarCopy(&attr.value, &initialValue, &UA_TYPES[type]);
     } else if (type == UA_TYPES_UINT32) {
         UA_UInt32 initialValue = *(UA_UInt32*)defaultValue;
-        UA_Variant_setScalar(&attr.value, &initialValue, &UA_TYPES[type]);
+        UA_Variant_setScalarCopy(&attr.value, &initialValue, &UA_TYPES[type]);
+    } else if (type == UA_TYPES_FLOAT) {
+        UA_Float initialValue = *(UA_Float*)defaultValue;
+        UA_Variant_setScalarCopy(&attr.value, &initialValue, &UA_TYPES[type]);
+    } else if (type == UA_TYPES_DOUBLE) {
+        UA_Double initialValue = *(UA_Double*)defaultValue;
+        UA_Variant_setScalarCopy(&attr.value, &initialValue, &UA_TYPES[type]);
     } else if (type == UA_TYPES_BOOLEAN) {
         UA_Boolean initialValue = *(UA_Boolean*)defaultValue;
-        UA_Variant_setScalar(&attr.value, &initialValue, &UA_TYPES[type]);
+        UA_Variant_setScalarCopy(&attr.value, &initialValue, &UA_TYPES[type]);
+    } else if (type == UA_TYPES_STRING) {
+        UA_String initialValue = UA_STRING_ALLOC((char*)defaultValue);
+        UA_Variant_setScalarCopy(&attr.value, &initialValue, &UA_TYPES[type]);
+        UA_String_deleteMembers(&initialValue);
     } else {
         throw "type not supported";
     }
@@ -75,6 +88,114 @@ static void signalHandler(int signum) {
     running = false;
 }
 
+static void addByteVariable(UA_Server *server, UA_Int16 nsId, const char *variable, UA_Byte defaultValue = 0) {
+    char* varName = newString();
+    sprintf(varName, "%s", variable);
+
+    char* desc = newString();
+    char* displayName = newString();
+    const char* qn = varName;
+
+    sprintf(desc, "%s.desc", varName);
+    sprintf(displayName, "%s.dn", varName);
+
+    char* nodeId = newString();
+    sprintf(nodeId, "%s", varName);
+
+    UA_NodeId parentNode = addVariable(server, nsId, UA_TYPES_BYTE, desc, displayName, nodeId, varName, &defaultValue);
+}
+
+static void addStringVariable(UA_Server *server, UA_Int16 nsId, const char *variable, const char *defaultValue) {
+    char* varName = newString();
+    sprintf(varName, "%s", variable);
+
+    char* desc = newString();
+    char* displayName = newString();
+    const char* qn = varName;
+
+    sprintf(desc, "%s.desc", varName);
+    sprintf(displayName, "%s.dn", varName);
+
+    char* nodeId = newString();
+    sprintf(nodeId, "%s", varName);
+
+    UA_NodeId parentNode = addVariable(server, nsId, UA_TYPES_STRING, desc, displayName, nodeId, varName, (void*)defaultValue);
+}
+
+static void addFloatVariable(UA_Server *server, UA_Int16 nsId, const char *variable, UA_Float defaultValue = 0.0f) {
+    char* varName = newString();
+    sprintf(varName, "%s", variable);
+
+    char* desc = newString();
+    char* displayName = newString();
+    const char* qn = varName;
+
+    sprintf(desc, "%s.desc", varName);
+    sprintf(displayName, "%s.dn", varName);
+
+    char* nodeId = newString();
+    sprintf(nodeId, "%s", varName);
+
+    UA_NodeId parentNode = addVariable(server, nsId, UA_TYPES_FLOAT, desc, displayName, nodeId, varName, &defaultValue);
+}
+
+static void addDoubleVariable(UA_Server *server, UA_Int16 nsId, const char *variable, UA_Double defaultValue = 0.0) {
+    char* varName = newString();
+    sprintf(varName, "%s", variable);
+
+    char* desc = newString();
+    char* displayName = newString();
+    const char* qn = varName;
+
+    sprintf(desc, "%s.desc", varName);
+    sprintf(displayName, "%s.dn", varName);
+
+    char* nodeId = newString();
+    sprintf(nodeId, "%s", varName);
+
+    UA_NodeId parentNode = addVariable(server, nsId, UA_TYPES_DOUBLE, desc, displayName, nodeId, varName, &defaultValue);
+}
+
+// Add array variable support
+static UA_NodeId addArrayVariable(UA_Server *server, UA_Int16 nsId, int type, const char *variable, void *arrayData, size_t arrayLength) {
+    char* varName = newString();
+    sprintf(varName, "%s", variable);
+
+    char* desc = newString();
+    char* displayName = newString();
+
+    sprintf(desc, "%s.desc", varName);
+    sprintf(displayName, "%s.dn", varName);
+
+    char* nodeIdStr = newString();
+    sprintf(nodeIdStr, "%s", varName);
+
+    UA_NodeId parentNodeId = UA_NODEID_NUMERIC(0, UA_NS0ID_OBJECTSFOLDER);
+    UA_NodeId referenceTypeId = UA_NODEID_NUMERIC(0, UA_NS0ID_ORGANIZES);
+    UA_NodeId typeDefinition = UA_NODEID_NUMERIC(0, UA_NS0ID_BASEDATAVARIABLETYPE);
+
+    UA_VariableAttributes attr = UA_VariableAttributes_default;
+    if (arrayLength > 0 && arrayData != NULL) {
+        UA_Variant_setArrayCopy(&attr.value, arrayData, arrayLength, &UA_TYPES[type]);
+    } else {
+        // Empty array
+        UA_Variant_setArray(&attr.value, NULL, 0, &UA_TYPES[type]);
+    }
+
+    attr.description = UA_LOCALIZEDTEXT((char*) "en-US", desc);
+    attr.displayName = UA_LOCALIZEDTEXT((char*) "en-US", displayName);
+    attr.dataType = UA_TYPES[type].typeId;
+    attr.accessLevel = UA_ACCESSLEVELMASK_READ | UA_ACCESSLEVELMASK_WRITE;
+
+    UA_NodeId nodeId = UA_NODEID_STRING(nsId, nodeIdStr);
+    UA_QualifiedName qualifiedName = UA_QUALIFIEDNAME(nsId, varName);
+    UA_Server_addVariableNode(server, nodeId, parentNodeId,
+                              referenceTypeId, qualifiedName,
+                              typeDefinition, attr, NULL, NULL);
+
+    return nodeId;
+}
+
 static void addVariables(UA_Server *server) {
     UA_Int16 ns2Id = UA_Server_addNamespace(server, "ns2"); // id=2
     UA_Int16 ns3Id = UA_Server_addNamespace(server, "ns3"); // id=3
@@ -89,6 +210,50 @@ static void addVariables(UA_Server *server) {
     addVariableV2(server, ns5Id, UA_TYPES_UINT16, "uint16c", 200);
     addVariableV2(server, ns5Id, UA_TYPES_BOOLEAN, "true_var", true);
     addVariableV2(server, ns5Id, UA_TYPES_BOOLEAN, "false_var", false);
+
+    // Add byte variables
+    addByteVariable(server, ns5Id, "byte_zero", 0);
+    addByteVariable(server, ns5Id, "byte_42", 42);
+    addByteVariable(server, ns5Id, "byte_max", 255);
+    addByteVariable(server, ns5Id, "byte_test", 128);
+
+    // Add string variables
+    addStringVariable(server, ns5Id, "string_empty", "");
+    addStringVariable(server, ns5Id, "string_hello", "Hello World");
+    addStringVariable(server, ns5Id, "string_test", "Test String Value");
+
+    // Add float variables
+    addFloatVariable(server, ns5Id, "float_zero", 0.0f);
+    addFloatVariable(server, ns5Id, "float_pi", 3.14159f);
+    addFloatVariable(server, ns5Id, "float_negative", -123.456f);
+
+    // Add double variables
+    addDoubleVariable(server, ns5Id, "double_zero", 0.0);
+    addDoubleVariable(server, ns5Id, "double_pi", 3.141592653589793);
+    addDoubleVariable(server, ns5Id, "double_negative", -987.654321);
+    addDoubleVariable(server, ns5Id, "double_large", 1.23456789e100);
+
+    // Add array variables
+    UA_Int32 int32Array[] = {1, 2, 3, 4, 5};
+    addArrayVariable(server, ns5Id, UA_TYPES_INT32, "int32_array", int32Array, 5);
+
+    // Empty array - pass NULL for empty arrays
+    addArrayVariable(server, ns5Id, UA_TYPES_INT32, "int32_array_empty", NULL, 0);
+
+    UA_Float floatArray[] = {1.1f, 2.2f, 3.3f};
+    addArrayVariable(server, ns5Id, UA_TYPES_FLOAT, "float_array", floatArray, 3);
+
+    UA_Boolean boolArray[] = {true, false, true, true, false};
+    addArrayVariable(server, ns5Id, UA_TYPES_BOOLEAN, "bool_array", boolArray, 5);
+
+    UA_Byte byteArray[] = {10, 20, 30, 40};
+    addArrayVariable(server, ns5Id, UA_TYPES_BYTE, "byte_array", byteArray, 4);
+
+    UA_UInt32 uint32Array[] = {100, 200, 300};
+    addArrayVariable(server, ns5Id, UA_TYPES_UINT32, "uint32_array", uint32Array, 3);
+
+    UA_Double doubleArray[] = {1.111, 2.222, 3.333, 4.444};
+    addArrayVariable(server, ns5Id, UA_TYPES_DOUBLE, "double_array", doubleArray, 4);
 }
 
 int main(void) {
