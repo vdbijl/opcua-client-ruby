@@ -17,6 +17,11 @@ group :development do
 end
 
 group :test do
-  gem 'debug' # Modern debugger for Ruby 3.1+
   gem 'rspec'
+  # debug gem requires Ruby 2.7+, use byebug for older versions
+  if RUBY_VERSION >= '2.7.0'
+    gem 'debug' # Modern debugger for Ruby 2.7+
+  else
+    gem 'byebug' # Debugger for Ruby 2.4-2.6
+  end
 end
