@@ -17,5 +17,6 @@ group :development do
 end
 
 group :test do
+  gem 'debug' # Modern debugger for Ruby 3.1+
   gem 'rspec'
 end

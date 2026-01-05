@@ -1,4 +1,5 @@
 #include <ruby.h>
+#include <ruby/encoding.h>
 #include "open62541.h"
 
 VALUE cClient;
@@ -27,9 +28,8 @@ static VALUE toRubyTime(UA_DateTime raw_date) {
     return rb_date;
 }
 
-static void
-handler_dataChanged(UA_Client *client, UA_UInt32 subId, void *subContext,
-                           UA_UInt32 monId, void *monContext, UA_DataValue *value) {
+static void handler_dataChanged(UA_Client *client, UA_UInt32 subId, void *subContext,
+		UA_UInt32 monId, void *monContext, UA_DataValue *value) {
 
     struct OpcuaClientContext *ctx = UA_Client_getContext(client);
     VALUE self = ctx->rubyClientInstance;
@@ -1032,7 +1032,7 @@ static VALUE rb_readUaValue(VALUE self, VALUE v_nsIndex, VALUE v_name, int type)
         result = DBL2NUM(val);
     } else if (type == UA_TYPES_STRING && UA_Variant_hasScalarType(&value, &UA_TYPES[UA_TYPES_STRING])) {
         UA_String *val = (UA_String*)value.data;
-        result = rb_str_new((char*)val->data, val->length);
+        result = rb_enc_str_new((char*)val->data, val->length, rb_utf8_encoding());
     } else {
         rb_raise(cError, "UA type mismatch");
         return Qnil;
@@ -1129,7 +1129,7 @@ static VALUE rb_readUaArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name, UA_U
         } else if (type == UA_TYPES_STRING && value.type == &UA_TYPES[UA_TYPES_STRING]) {
             UA_String *array = (UA_String*)value.data;
             for (size_t i = 0; i < arrayLength; i++) {
-                rb_ary_push(result, rb_str_new((char*)array[i].data, array[i].length));
+                rb_ary_push(result, rb_enc_str_new((char*)array[i].data, array[i].length, rb_utf8_encoding()));
             }
         } else {
             UA_Variant_deleteMembers(&value);

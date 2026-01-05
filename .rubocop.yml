@@ -8,4 +8,18 @@ AllCops:
     - 'bin/**/*'
     - 'ext/**/*'
     - 'tools/**/*'
+    - 'examples/**/*'
+
   NewCops: enable
+
+Metrics/AbcSize:
+  Enabled: false
+
+Metrics/MethodLength:
+  Max: 30
+
+RSpec/ExampleLength:
+  Max: 10
+
+RSpec/MultipleExpectations:
+  Max: 3
