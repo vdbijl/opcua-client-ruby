@@ -32,12 +32,12 @@ RSpec.describe 'OPC UA Client Integration Tests', type: :feature do
 
   # Stop the test server
   def stop_server
-    puts "Server stopping: #{@server_pid}"
+    # puts "Server stopping: #{@server_pid}"
     if @server_pid
       Process.kill('TERM', @server_pid)
       Process.wait(@server_pid)
     end
-    puts 'Server stopped'
+    # puts 'Server stopped'
   end
   # rubocop:enable RSpec/InstanceVariable
 
