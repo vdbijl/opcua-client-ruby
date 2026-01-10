@@ -21,6 +21,11 @@ jobs:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true # runs 'bundle install' and caches installed gems automatically
 
+      # Install mbedTLS libraries (required for open62541 v1.4.14)
+      - name: Install mbedTLS
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libmbedtls-dev
+
       # Build test server (Linux only)
       - name: Build test server
         if: runner.os == 'Linux'
