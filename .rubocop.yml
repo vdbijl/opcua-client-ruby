@@ -9,6 +9,7 @@ AllCops:
     - 'ext/**/*'
     - 'tools/**/*'
     - 'examples/**/*'
+    - 'vendor/**/*'
 
   NewCops: enable
 
