@@ -7,17 +7,16 @@ require 'opcua_client'
 if GC.respond_to?(:verify_compaction_references)
   # This method was added in Ruby 3.0.0. Calling it this way asks the GC to
   # move objects around, helping to find object movement bugs.
-  GC.verify_compaction_references(expand_heap: true, toward: :empty)
+  # The expand_heap parameter was added in Ruby 3.2.0
+  if RUBY_VERSION >= '3.2.0'
+    GC.verify_compaction_references(expand_heap: true, toward: :empty)
+  else
+    GC.verify_compaction_references(toward: :empty)
+  end
 end
 
 def new_client(connect: true)
-  client = OPCUAClient::Client.new
-
-  if connect
-    # TODO
-  end
-
-  client
+  OPCUAClient::Client.new
 end
 
 RSpec.configure do |config|
