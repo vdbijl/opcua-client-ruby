@@ -1,10 +1,21 @@
+#define _XOPEN_SOURCE 600
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include "open62541.h"
 
-static char* newString() {
-    // TODO: memory management
-    return new char [100];
+#define STRING_BUFFER_SIZE 100
+
+static char* newString(void) {
+    return (char*)malloc(STRING_BUFFER_SIZE);
+}
+
+static void freeStrings(char *s1, char *s2, char *s3, char *s4) {
+    if (s1) free(s1);
+    if (s2) free(s2);
+    if (s3) free(s3);
+    if (s4) free(s4);
 }
 
 static UA_NodeId addVariableUnder(UA_Server *server, UA_Int16 nsId, int type, const char *desc, const char *name, const char *nodeIdString, const char *qnString, UA_NodeId parentNodeId, void *defaultValue) {
@@ -41,9 +52,10 @@ static UA_NodeId addVariableUnder(UA_Server *server, UA_Int16 nsId, int type, co
     } else if (type == UA_TYPES_STRING) {
         UA_String initialValue = UA_STRING_ALLOC((char*)defaultValue);
         UA_Variant_setScalarCopy(&attr.value, &initialValue, &UA_TYPES[type]);
-        UA_String_deleteMembers(&initialValue);
+        UA_String_clear(&initialValue);
     } else {
-        throw "type not supported";
+        UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER, "Unsupported type: %d", type);
+        return UA_NODEID_NULL;
     }
 
     attr.description = UA_LOCALIZEDTEXT((char*) "en-US", (char*) desc);
@@ -65,21 +77,25 @@ static UA_NodeId addVariable(UA_Server *server, UA_Int16 nsId, int type, const c
     return addVariableUnder(server, nsId, type, desc, name, nodeIdString, qnString, parentNodeId, defaultValue);
 }
 
-static void addVariableV2(UA_Server *server, UA_Int16 nsId, int type, const char *variable, UA_Int32 defaultValue = 0) {
+static void addVariableV2(UA_Server *server, UA_Int16 nsId, int type, const char *variable, UA_Int32 defaultValue) {
     char* varName = newString();
-    sprintf(varName, "%s", variable);
-
     char* desc = newString();
     char* displayName = newString();
-    const char* qn = varName;
+    char* nodeId = newString();
 
+    if (!varName || !desc || !displayName || !nodeId) {
+        freeStrings(varName, desc, displayName, nodeId);
+        return;
+    }
+
+    sprintf(varName, "%s", variable);
     sprintf(desc, "%s.desc", varName);
     sprintf(displayName, "%s.dn", varName);
-
-    char* nodeId = newString();
     sprintf(nodeId, "%s", varName);
 
-    UA_NodeId parentNode = addVariable(server, nsId, type, desc, displayName, nodeId, varName, &defaultValue);
+    addVariable(server, nsId, type, desc, displayName, nodeId, varName, &defaultValue);
+
+    freeStrings(varName, desc, displayName, nodeId);
 }
 
 UA_Boolean running = true;
@@ -88,86 +104,105 @@ static void signalHandler(int signum) {
     running = false;
 }
 
-static void addByteVariable(UA_Server *server, UA_Int16 nsId, const char *variable, UA_Byte defaultValue = 0) {
+static void addByteVariable(UA_Server *server, UA_Int16 nsId, const char *variable, UA_Byte defaultValue) {
     char* varName = newString();
-    sprintf(varName, "%s", variable);
-
     char* desc = newString();
     char* displayName = newString();
-    const char* qn = varName;
+    char* nodeId = newString();
 
+    if (!varName || !desc || !displayName || !nodeId) {
+        freeStrings(varName, desc, displayName, nodeId);
+        return;
+    }
+
+    sprintf(varName, "%s", variable);
     sprintf(desc, "%s.desc", varName);
     sprintf(displayName, "%s.dn", varName);
-
-    char* nodeId = newString();
     sprintf(nodeId, "%s", varName);
 
-    UA_NodeId parentNode = addVariable(server, nsId, UA_TYPES_BYTE, desc, displayName, nodeId, varName, &defaultValue);
+    addVariable(server, nsId, UA_TYPES_BYTE, desc, displayName, nodeId, varName, &defaultValue);
+
+    freeStrings(varName, desc, displayName, nodeId);
 }
 
 static void addStringVariable(UA_Server *server, UA_Int16 nsId, const char *variable, const char *defaultValue) {
     char* varName = newString();
-    sprintf(varName, "%s", variable);
-
     char* desc = newString();
     char* displayName = newString();
-    const char* qn = varName;
+    char* nodeId = newString();
 
+    if (!varName || !desc || !displayName || !nodeId) {
+        freeStrings(varName, desc, displayName, nodeId);
+        return;
+    }
+
+    sprintf(varName, "%s", variable);
     sprintf(desc, "%s.desc", varName);
     sprintf(displayName, "%s.dn", varName);
-
-    char* nodeId = newString();
     sprintf(nodeId, "%s", varName);
 
-    UA_NodeId parentNode = addVariable(server, nsId, UA_TYPES_STRING, desc, displayName, nodeId, varName, (void*)defaultValue);
+    addVariable(server, nsId, UA_TYPES_STRING, desc, displayName, nodeId, varName, (void*)defaultValue);
+
+    freeStrings(varName, desc, displayName, nodeId);
 }
 
-static void addFloatVariable(UA_Server *server, UA_Int16 nsId, const char *variable, UA_Float defaultValue = 0.0f) {
+static void addFloatVariable(UA_Server *server, UA_Int16 nsId, const char *variable, UA_Float defaultValue) {
     char* varName = newString();
-    sprintf(varName, "%s", variable);
-
     char* desc = newString();
     char* displayName = newString();
-    const char* qn = varName;
+    char* nodeId = newString();
 
+    if (!varName || !desc || !displayName || !nodeId) {
+        freeStrings(varName, desc, displayName, nodeId);
+        return;
+    }
+
+    sprintf(varName, "%s", variable);
     sprintf(desc, "%s.desc", varName);
     sprintf(displayName, "%s.dn", varName);
-
-    char* nodeId = newString();
     sprintf(nodeId, "%s", varName);
 
-    UA_NodeId parentNode = addVariable(server, nsId, UA_TYPES_FLOAT, desc, displayName, nodeId, varName, &defaultValue);
+    addVariable(server, nsId, UA_TYPES_FLOAT, desc, displayName, nodeId, varName, &defaultValue);
+
+    freeStrings(varName, desc, displayName, nodeId);
 }
 
-static void addDoubleVariable(UA_Server *server, UA_Int16 nsId, const char *variable, UA_Double defaultValue = 0.0) {
+static void addDoubleVariable(UA_Server *server, UA_Int16 nsId, const char *variable, UA_Double defaultValue) {
     char* varName = newString();
-    sprintf(varName, "%s", variable);
-
     char* desc = newString();
     char* displayName = newString();
-    const char* qn = varName;
+    char* nodeId = newString();
 
+    if (!varName || !desc || !displayName || !nodeId) {
+        freeStrings(varName, desc, displayName, nodeId);
+        return;
+    }
+
+    sprintf(varName, "%s", variable);
     sprintf(desc, "%s.desc", varName);
     sprintf(displayName, "%s.dn", varName);
-
-    char* nodeId = newString();
     sprintf(nodeId, "%s", varName);
 
-    UA_NodeId parentNode = addVariable(server, nsId, UA_TYPES_DOUBLE, desc, displayName, nodeId, varName, &defaultValue);
+    addVariable(server, nsId, UA_TYPES_DOUBLE, desc, displayName, nodeId, varName, &defaultValue);
+
+    freeStrings(varName, desc, displayName, nodeId);
 }
 
-// Add array variable support
+/* Add array variable support */
 static UA_NodeId addArrayVariable(UA_Server *server, UA_Int16 nsId, int type, const char *variable, void *arrayData, size_t arrayLength) {
     char* varName = newString();
-    sprintf(varName, "%s", variable);
-
     char* desc = newString();
     char* displayName = newString();
+    char* nodeIdStr = newString();
 
+    if (!varName || !desc || !displayName || !nodeIdStr) {
+        freeStrings(varName, desc, displayName, nodeIdStr);
+        return UA_NODEID_NULL;
+    }
+
+    sprintf(varName, "%s", variable);
     sprintf(desc, "%s.desc", varName);
     sprintf(displayName, "%s.dn", varName);
-
-    char* nodeIdStr = newString();
     sprintf(nodeIdStr, "%s", varName);
 
     UA_NodeId parentNodeId = UA_NODEID_NUMERIC(0, UA_NS0ID_OBJECTSFOLDER);
@@ -193,6 +228,7 @@ static UA_NodeId addArrayVariable(UA_Server *server, UA_Int16 nsId, int type, co
                               referenceTypeId, qualifiedName,
                               typeDefinition, attr, NULL, NULL);
 
+    freeStrings(varName, desc, displayName, nodeIdStr);
     return nodeId;
 }
 
@@ -202,14 +238,14 @@ static void addVariables(UA_Server *server) {
     UA_Int16 ns4Id = UA_Server_addNamespace(server, "ns4"); // id=4
     UA_Int16 ns5Id = UA_Server_addNamespace(server, "ns5"); // id=5
 
-    addVariableV2(server, ns5Id, UA_TYPES_UINT32, "uint32a");
+    addVariableV2(server, ns5Id, UA_TYPES_UINT32, "uint32a", 0);
     addVariableV2(server, ns5Id, UA_TYPES_UINT32, "uint32b", 1000);
     addVariableV2(server, ns5Id, UA_TYPES_UINT32, "uint32c", 2000);
-    addVariableV2(server, ns5Id, UA_TYPES_UINT16, "uint16a");
+    addVariableV2(server, ns5Id, UA_TYPES_UINT16, "uint16a", 0);
     addVariableV2(server, ns5Id, UA_TYPES_UINT16, "uint16b", 100);
     addVariableV2(server, ns5Id, UA_TYPES_UINT16, "uint16c", 200);
-    addVariableV2(server, ns5Id, UA_TYPES_BOOLEAN, "true_var", true);
-    addVariableV2(server, ns5Id, UA_TYPES_BOOLEAN, "false_var", false);
+    addVariableV2(server, ns5Id, UA_TYPES_BOOLEAN, "true_var", 1);
+    addVariableV2(server, ns5Id, UA_TYPES_BOOLEAN, "false_var", 0);
 
     // Add byte variables
     addByteVariable(server, ns5Id, "byte_zero", 0);
@@ -260,13 +296,15 @@ int main(void) {
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);
 
-    UA_ServerConfig *config = UA_ServerConfig_new_default();
-    UA_Server *server = UA_Server_new(config);
+    /* Create server with default configuration (v1.4.14 API) */
+    UA_Server *server = UA_Server_new();
+    UA_ServerConfig *config = UA_Server_getConfig(server);
+    UA_ServerConfig_setDefault(config);
+
     addVariables(server);
 
     UA_StatusCode retval = UA_Server_run(server, &running);
 
     UA_Server_delete(server);
-    UA_ServerConfig_delete(config);
     return (int)retval;
 }

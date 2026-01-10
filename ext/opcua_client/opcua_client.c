@@ -89,33 +89,34 @@ subscriptionInactivityCallback(UA_Client *client, UA_UInt32 subscriptionId, void
 }
 
 static void
-stateCallback (UA_Client *client, UA_ClientState clientState) {
+stateCallback (UA_Client *client, UA_SecureChannelState channelState,
+               UA_SessionState sessionState, UA_StatusCode connectStatus) {
     struct OpcuaClientContext *ctx = UA_Client_getContext(client);
 
-    switch(clientState) {
-        case UA_CLIENTSTATE_DISCONNECTED:
-            ; // printf("%s\n", "The client is disconnected");
+    /* Handle session state changes */
+    if(sessionState == UA_SESSIONSTATE_ACTIVATED) {
+        /* A new session was created! */
+        // printf("%s\n", "A new session was created!");
+        VALUE self = ctx->rubyClientInstance;
+
+        VALUE callback = rb_ivar_get(self, rb_intern("@callback_after_session_created"));
+        if (!NIL_P(callback)) {
+            VALUE params = rb_ary_new();
+            rb_ary_push(params, self);
+            rb_proc_call(callback, params); // rescue?
+        }
+    }
+
+    /* Handle channel state changes */
+    switch(channelState) {
+        case UA_SECURECHANNELSTATE_CLOSED:
+            ; // printf("%s\n", "The channel is closed");
             break;
-        case UA_CLIENTSTATE_CONNECTED:
-            ; // printf("%s\n", "A TCP connection to the server is open");
-            break;
-        case UA_CLIENTSTATE_SECURECHANNEL:
+        case UA_SECURECHANNELSTATE_OPEN:
             ; // printf("%s\n", "A SecureChannel to the server is open");
             break;
-        case UA_CLIENTSTATE_SESSION:
-            ; // printf("%s\n", "A new session was created!");
-            VALUE self = ctx->rubyClientInstance;
-
-            VALUE callback = rb_ivar_get(self, rb_intern("@callback_after_session_created"));
-            if (!NIL_P(callback)) {
-                VALUE params = rb_ary_new();
-                rb_ary_push(params, self);
-                rb_proc_call(callback, params); // rescue?
-            }
-
-            break;
-        case UA_CLIENTSTATE_SESSION_RENEWED:
-            /* The session was renewed. We don't need to recreate the subscription. */
+        case UA_SECURECHANNELSTATE_CLOSING:
+            ; // printf("%s\n", "The channel is closing");
             break;
     }
     return;
@@ -158,21 +159,51 @@ static VALUE allocate(VALUE klass) {
     return TypedData_Wrap_Struct(klass, &UA_Client_Type, uclient);
 }
 
+/* Custom logger that suppresses all output */
+static void silent_log(void *context, UA_LogLevel level, UA_LogCategory category,
+                      const char *msg, va_list args) {
+    /* Do nothing - suppress all log output */
+    (void)context;
+    (void)level;
+    (void)category;
+    (void)msg;
+    (void)args;
+}
+
+static UA_Logger silent_logger = {silent_log, NULL, NULL};
+
 static VALUE rb_initialize(VALUE self) {
     struct UninitializedClient * uclient;
     TypedData_Get_Struct(self, struct UninitializedClient, &UA_Client_Type, uclient);
 
-    UA_ClientConfig customConfig = UA_ClientConfig_default;
-    customConfig.stateCallback = stateCallback;
-    customConfig.subscriptionInactivityCallback = subscriptionInactivityCallback;
+    /* Create client with default configuration */
+    uclient->client = UA_Client_new();
+    if(!uclient->client) {
+        rb_raise(cError, "Failed to create UA_Client");
+        return Qnil;
+    }
 
+    /* Get the client config and set defaults */
+    UA_ClientConfig *config = UA_Client_getConfig(uclient->client);
+    UA_ClientConfig_setDefault(config);
+
+    /* Replace the logger with our silent logger */
+    config->logging = &silent_logger;
+
+    /* Also silence the EventLoop logger if it exists */
+    if(config->eventLoop) {
+        config->eventLoop->logger = &silent_logger;
+    }
+
+    /* Set custom callbacks */
+    config->stateCallback = stateCallback;
+    config->subscriptionInactivityCallback = subscriptionInactivityCallback;
+
+    /* Set up context */
     struct OpcuaClientContext *ctx = ALLOC(struct OpcuaClientContext);
     *ctx = (const struct OpcuaClientContext){ 0 };
-
     ctx->rubyClientInstance = self;
-    customConfig.clientContext = ctx;
-
-    uclient->client = UA_Client_new(customConfig);
+    config->clientContext = ctx;
 
     return Qnil;
 }
@@ -273,7 +304,7 @@ static UA_StatusCode multiRead(UA_Client *client, const UA_NodeId *nodeId, UA_Va
     }
 
     if(retval != UA_STATUSCODE_GOOD) {
-        UA_ReadResponse_deleteMembers(&response);
+        UA_ReadResponse_clear(&response);
         UA_free(rValues);
         return retval;
     }
@@ -283,7 +314,7 @@ static UA_StatusCode multiRead(UA_Client *client, const UA_NodeId *nodeId, UA_Va
 
     if (response.resultsSize != varsCount) {
         retval = UA_STATUSCODE_BADUNEXPECTEDERROR;
-        UA_ReadResponse_deleteMembers(&response);
+        UA_ReadResponse_clear(&response);
         UA_free(rValues);
         return retval;
     }
@@ -291,7 +322,7 @@ static UA_StatusCode multiRead(UA_Client *client, const UA_NodeId *nodeId, UA_Va
     for (int i=0; i<varsCount; i++) {
         if ((results[i].hasStatus && results[i].status != UA_STATUSCODE_GOOD) || !results[i].hasValue) {
             retval = UA_STATUSCODE_BADUNEXPECTEDERROR;
-            UA_ReadResponse_deleteMembers(&response);
+            UA_ReadResponse_clear(&response);
             UA_free(rValues);
             return retval;
         }
@@ -302,7 +333,7 @@ static UA_StatusCode multiRead(UA_Client *client, const UA_NodeId *nodeId, UA_Va
         UA_Variant_init(&results[i].value);
     }
 
-    UA_ReadResponse_deleteMembers(&response);
+    UA_ReadResponse_clear(&response);
     UA_free(rValues);
     return retval;
 }
@@ -353,7 +384,7 @@ static UA_StatusCode multiWrite(UA_Client *client, const UA_NodeId *nodeId, cons
         // printf("%s\n", "multiWrite: bad write");
     }
 
-    UA_WriteResponse_deleteMembers(&wResp);
+    UA_WriteResponse_clear(&wResp);
     UA_free(wValues);
 
     return retval;
@@ -431,7 +462,7 @@ static VALUE rb_readUaValues(VALUE self, VALUE v_nsIndex, VALUE v_aryNames) {
     } else {
         /* Clean up */
         for (int i=0; i<namesCount; i++) {
-            UA_Variant_deleteMembers(&readValues[i]);
+            UA_Variant_clear(&readValues[i]);
         }
         UA_free(nodes);
         UA_free(readValues);
@@ -441,7 +472,7 @@ static VALUE rb_readUaValues(VALUE self, VALUE v_nsIndex, VALUE v_aryNames) {
 
     /* Clean up */
     for (int i=0; i<namesCount; i++) {
-        UA_Variant_deleteMembers(&readValues[i]);
+        UA_Variant_clear(&readValues[i]);
     }
     UA_free(nodes);
     UA_free(readValues);
@@ -567,7 +598,7 @@ static VALUE rb_writeUaValues(VALUE self, VALUE v_nsIndex, VALUE v_aryNames, VAL
     } else {
         /* Clean up */
         for (int i=0; i<namesCount; i++) {
-            UA_Variant_deleteMembers(&values[i]);
+            UA_Variant_clear(&values[i]);
         }
         UA_free(nodes);
         UA_free(values);
@@ -577,7 +608,7 @@ static VALUE rb_writeUaValues(VALUE self, VALUE v_nsIndex, VALUE v_aryNames, VAL
 
     /* Clean up */
     for (int i=0; i<namesCount; i++) {
-        UA_Variant_deleteMembers(&values[i]);
+        UA_Variant_clear(&values[i]);
     }
     UA_free(nodes);
     UA_free(values);
@@ -679,12 +710,12 @@ static VALUE rb_writeUaValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_
         // printf("%s\n", "value write successful");
     } else {
         /* Clean up */
-        UA_Variant_deleteMembers(&value);
+        UA_Variant_clear(&value);
         return raise_ua_status_error(status);
     }
 
     /* Clean up */
-    UA_Variant_deleteMembers(&value);
+    UA_Variant_clear(&value);
 
     return Qnil;
 }
@@ -805,7 +836,7 @@ static VALUE rb_writeUaArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VAL
         }
         UA_Variant_setArrayCopy(&value, array, arrayLength, &UA_TYPES[UA_TYPES_STRING]);
         for (long i = 0; i < arrayLength; i++) {
-            UA_String_deleteMembers(&array[i]);
+            UA_String_clear(&array[i]);
         }
         UA_free(array);
     } else {
@@ -816,11 +847,11 @@ static VALUE rb_writeUaArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VAL
     UA_StatusCode status = UA_Client_writeValueAttribute(client, UA_NODEID_STRING(nsIndex, name), &value);
 
     if (status != UA_STATUSCODE_GOOD) {
-        UA_Variant_deleteMembers(&value);
+        UA_Variant_clear(&value);
         return raise_ua_status_error(status);
     }
 
-    UA_Variant_deleteMembers(&value);
+    UA_Variant_clear(&value);
     return Qnil;
 }
 
@@ -989,7 +1020,7 @@ static VALUE rb_readUaValue(VALUE self, VALUE v_nsIndex, VALUE v_name, int type)
         // printf("%s\n", "value read successful");
     } else {
         /* Clean up */
-        UA_Variant_deleteMembers(&value);
+        UA_Variant_clear(&value);
         return raise_ua_status_error(status);
     }
 
@@ -1039,7 +1070,7 @@ static VALUE rb_readUaValue(VALUE self, VALUE v_nsIndex, VALUE v_name, int type)
     }
 
     /* Clean up */
-    UA_Variant_deleteMembers(&value);
+    UA_Variant_clear(&value);
 
     return result;
 }
@@ -1132,15 +1163,15 @@ static VALUE rb_readUaArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name, UA_U
                 rb_ary_push(result, rb_enc_str_new((char*)array[i].data, array[i].length, rb_utf8_encoding()));
             }
         } else {
-            UA_Variant_deleteMembers(&value);
+            UA_Variant_clear(&value);
             rb_raise(cError, "UA type mismatch");
             return Qnil;
         }
 
-        UA_Variant_deleteMembers(&value);
+        UA_Variant_clear(&value);
         return result;
     } else {
-        UA_Variant_deleteMembers(&value);
+        UA_Variant_clear(&value);
         rb_raise(cError, "Expected array but got scalar value");
         return Qnil;
     }
@@ -1258,7 +1289,7 @@ static VALUE rb_run_single_monitoring_cycle(VALUE self) {
     TypedData_Get_Struct(self, struct UninitializedClient, &UA_Client_Type, uclient);
     UA_Client *client = uclient->client;
 
-    UA_StatusCode status = UA_Client_runAsync(client, 1000);
+    UA_StatusCode status = UA_Client_run_iterate(client, 1000);
     return UINT2NUM(status);
 }
 
@@ -1267,7 +1298,7 @@ static VALUE rb_run_single_monitoring_cycle_bang(VALUE self) {
     TypedData_Get_Struct(self, struct UninitializedClient, &UA_Client_Type, uclient);
     UA_Client *client = uclient->client;
 
-    UA_StatusCode status = UA_Client_runAsync(client, 1000);
+    UA_StatusCode status = UA_Client_run_iterate(client, 1000);
 
     if (status != UA_STATUSCODE_GOOD) {
         return raise_ua_status_error(status);
@@ -1281,16 +1312,28 @@ static VALUE rb_state(VALUE self) {
     TypedData_Get_Struct(self, struct UninitializedClient, &UA_Client_Type, uclient);
     UA_Client *client = uclient->client;
 
-    UA_ClientState state = UA_Client_getState(client);
-    return INT2NUM(state);
+    UA_SecureChannelState channelState;
+    UA_SessionState sessionState;
+    UA_StatusCode connectStatus;
+    UA_Client_getState(client, &channelState, &sessionState, &connectStatus);
+
+    /* Return session state as the primary state indicator */
+    return INT2NUM(sessionState);
 }
 
 static void defineStateContants(VALUE mOPCUAClient) {
-    rb_define_const(mOPCUAClient, "UA_CLIENTSTATE_DISCONNECTED", INT2NUM(UA_CLIENTSTATE_DISCONNECTED));
-    rb_define_const(mOPCUAClient, "UA_CLIENTSTATE_CONNECTED", INT2NUM(UA_CLIENTSTATE_CONNECTED));
-    rb_define_const(mOPCUAClient, "UA_CLIENTSTATE_SECURECHANNEL", INT2NUM(UA_CLIENTSTATE_SECURECHANNEL));
-    rb_define_const(mOPCUAClient, "UA_CLIENTSTATE_SESSION", INT2NUM(UA_CLIENTSTATE_SESSION));
-    rb_define_const(mOPCUAClient, "UA_CLIENTSTATE_SESSION_RENEWED", INT2NUM(UA_CLIENTSTATE_SESSION_RENEWED));
+    /* Session state constants */
+    rb_define_const(mOPCUAClient, "UA_SESSIONSTATE_CLOSED", INT2NUM(UA_SESSIONSTATE_CLOSED));
+    rb_define_const(mOPCUAClient, "UA_SESSIONSTATE_CREATE_REQUESTED", INT2NUM(UA_SESSIONSTATE_CREATE_REQUESTED));
+    rb_define_const(mOPCUAClient, "UA_SESSIONSTATE_CREATED", INT2NUM(UA_SESSIONSTATE_CREATED));
+    rb_define_const(mOPCUAClient, "UA_SESSIONSTATE_ACTIVATE_REQUESTED", INT2NUM(UA_SESSIONSTATE_ACTIVATE_REQUESTED));
+    rb_define_const(mOPCUAClient, "UA_SESSIONSTATE_ACTIVATED", INT2NUM(UA_SESSIONSTATE_ACTIVATED));
+    rb_define_const(mOPCUAClient, "UA_SESSIONSTATE_CLOSING", INT2NUM(UA_SESSIONSTATE_CLOSING));
+
+    /* Secure channel state constants */
+    rb_define_const(mOPCUAClient, "UA_SECURECHANNELSTATE_CLOSED", INT2NUM(UA_SECURECHANNELSTATE_CLOSED));
+    rb_define_const(mOPCUAClient, "UA_SECURECHANNELSTATE_OPEN", INT2NUM(UA_SECURECHANNELSTATE_OPEN));
+    rb_define_const(mOPCUAClient, "UA_SECURECHANNELSTATE_CLOSING", INT2NUM(UA_SECURECHANNELSTATE_CLOSING));
 }
 
 void Init_opcua_client()
