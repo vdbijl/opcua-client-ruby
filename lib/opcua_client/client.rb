@@ -1,4 +1,7 @@
+# frozen_string_literal: true
+
 module OPCUAClient
+  # Client code namespace
   class Client
     def after_session_created(&block)
       @callback_after_session_created = block
@@ -11,11 +14,14 @@ module OPCUAClient
     def human_state
       state = self.state
 
-      if state == OPCUAClient::UA_CLIENTSTATE_DISCONNECTED; "UA_CLIENTSTATE_DISCONNECTED"
-      elsif state == OPCUAClient::UA_CLIENTSTATE_CONNECTED; "UA_CLIENTSTATE_CONNECTED"
-      elsif state == OPCUAClient::UA_CLIENTSTATE_SECURECHANNEL; "UA_CLIENTSTATE_SECURECHANNEL"
-      elsif state == OPCUAClient::UA_CLIENTSTATE_SESSION; "UA_CLIENTSTATE_SESSION"
-      elsif state == OPCUAClient::UA_CLIENTSTATE_SESSION_RENEWED; "UA_CLIENTSTATE_SESSION_RENEWED"
+      case state
+      when OPCUAClient::UA_SESSIONSTATE_CLOSED            then 'UA_SESSIONSTATE_CLOSED'
+      when OPCUAClient::UA_SESSIONSTATE_CREATE_REQUESTED  then 'UA_SESSIONSTATE_CREATE_REQUESTED'
+      when OPCUAClient::UA_SESSIONSTATE_CREATED           then 'UA_SESSIONSTATE_CREATED'
+      when OPCUAClient::UA_SESSIONSTATE_ACTIVATE_REQUESTED then 'UA_SESSIONSTATE_ACTIVATE_REQUESTED'
+      when OPCUAClient::UA_SESSIONSTATE_ACTIVATED         then 'UA_SESSIONSTATE_ACTIVATED'
+      when OPCUAClient::UA_SESSIONSTATE_CLOSING           then 'UA_SESSIONSTATE_CLOSING'
+      else 'UNKNOWN_STATE'
       end
     end
   end

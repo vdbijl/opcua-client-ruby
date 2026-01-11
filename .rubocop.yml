@@ -1,0 +1,26 @@
+plugins:
+    - rubocop-rspec
+    - rubocop-performance
+    - rubocop-rake
+
+AllCops:
+  Exclude:
+    - 'bin/**/*'
+    - 'ext/**/*'
+    - 'tools/**/*'
+    - 'examples/**/*'
+    - 'vendor/**/*'
+
+  NewCops: enable
+
+Metrics/AbcSize:
+  Enabled: false
+
+Metrics/MethodLength:
+  Max: 30
+
+RSpec/ExampleLength:
+  Max: 10
+
+RSpec/MultipleExpectations:
+  Max: 3

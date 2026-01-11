@@ -62,23 +62,64 @@ end
 
 All methods raise OPCUAClient::Error if unsuccessful.
 
+* ```client.read_byte(Fixnum ns, String name) => Fixnum```
+* ```client.read_sbyte(Fixnum ns, String name) => Fixnum```
 * ```client.read_int16(Fixnum ns, String name) => Fixnum```
 * ```client.read_uint16(Fixnum ns, String name) => Fixnum```
 * ```client.read_int32(Fixnum ns, String name) => Fixnum```
 * ```client.read_uint32(Fixnum ns, String name) => Fixnum```
+* ```client.read_int64(Fixnum ns, String name) => Fixnum```
+* ```client.read_uint64(Fixnum ns, String name) => Fixnum```
 * ```client.read_float(Fixnum ns, String name) => Float```
+* ```client.read_double(Fixnum ns, String name) => Float```
 * ```client.read_boolean(Fixnum ns, String name) => true/false```
+* ```client.read_string(Fixnum ns, String name) => String```
+* ```client.read_byte_array(Fixnum ns, String name) => Array[Fixnum]```
+* ```client.read_sbyte_array(Fixnum ns, String name) => Array[Fixnum]```
+* ```client.read_int16_array(Fixnum ns, String name) => Array[Fixnum]```
+* ```client.read_uint16_array(Fixnum ns, String name) => Array[Fixnum]```
+* ```client.read_int32_array(Fixnum ns, String name) => Array[Fixnum]```
+* ```client.read_uint32_array(Fixnum ns, String name) => Array[Fixnum]```
+* ```client.read_int64_array(Fixnum ns, String name) => Array[Fixnum]```
+* ```client.read_uint64_array(Fixnum ns, String name) => Array[Fixnum]```
+* ```client.read_float_array(Fixnum ns, String name) => Array[Float]```
+* ```client.read_double_array(Fixnum ns, String name) => Array[Float]```
+* ```client.read_boolean_array(Fixnum ns, String name) => Array[true/false]```
+* ```client.read_string_array(Fixnum ns, String name) => Array[String]```
+* ```client.write_byte(Fixnum ns, String name, Fixnum value)```
+* ```client.write_sbyte(Fixnum ns, String name, Fixnum value)```
 * ```client.write_int16(Fixnum ns, String name, Fixnum value)```
 * ```client.write_uint16(Fixnum ns, String name, Fixnum value)```
 * ```client.write_int32(Fixnum ns, String name, Fixnum value)```
 * ```client.write_uint32(Fixnum ns, String name, Fixnum value)```
+* ```client.write_int64(Fixnum ns, String name, Fixnum value)```
+* ```client.write_uint64(Fixnum ns, String name, Fixnum value)```
 * ```client.write_float(Fixnum ns, String name, Float value)```
+* ```client.write_double(Fixnum ns, String name, Float value)```
 * ```client.write_boolean(Fixnum ns, String name, bool value)```
+* ```client.write_string(Fixnum ns, String name, String value)```
+* ```client.write_byte_array(Fixnum ns, String name, Array[Fixnum] value)```
+* ```client.write_sbyte_array(Fixnum ns, String name, Array[Fixnum] value)```
+* ```client.write_int16_array(Fixnum ns, String name, Array[Fixnum] value)```
+* ```client.write_uint16_array(Fixnum ns, String name, Array[Fixnum] value)```
+* ```client.write_int32_array(Fixnum ns, String name, Array[Fixnum] value)```
+* ```client.write_uint32_array(Fixnum ns, String name, Array[Fixnum] value)```
+* ```client.write_int64_array(Fixnum ns, String name, Array[Fixnum] value)```
+* ```client.write_uint64_array(Fixnum ns, String name, Array[Fixnum] value)```
+* ```client.write_float_array(Fixnum ns, String name, Array[Float] value)```
+* ```client.write_double_array(Fixnum ns, String name, Array[Float] value)```
+* ```client.write_boolean_array(Fixnum ns, String name, Array[bool] value)```
+* ```client.write_string_array(Fixnum ns, String name, Array[String] value)```
+* ```client.multi_write_byte(Fixnum ns, Array[String] names, Array[Fixnum] values)```
+* ```client.multi_write_sbyte(Fixnum ns, Array[String] names, Array[Fixnum] values)```
 * ```client.multi_write_int16(Fixnum ns, Array[String] names, Array[Fixnum] values)```
 * ```client.multi_write_uint16(Fixnum ns, Array[String] names, Array[Fixnum] values)```
 * ```client.multi_write_int32(Fixnum ns, Array[String] names, Array[Fixnum] values)```
 * ```client.multi_write_uint32(Fixnum ns, Array[String] names, Array[Fixnum] values)```
+* ```client.multi_write_int64(Fixnum ns, Array[String] names, Array[Fixnum] values)```
+* ```client.multi_write_uint64(Fixnum ns, Array[String] names, Array[Fixnum] values)```
 * ```client.multi_write_float(Fixnum ns, Array[String] names, Array[Float] values)```
+* ```client.multi_write_double(Fixnum ns, Array[String] names, Array[Float] values)```
 * ```client.multi_write_boolean(Fixnum ns, Array[String] names, Array[bool] values)```
 
 ### Available methods - misc:
@@ -155,4 +196,30 @@ pry> client.read_bool(5, "true_var")
 ```console
 $ bin/rake compile
 $ bin/rake spec
+```
+
+### Code Quality
+
+This project uses [RuboCop](https://rubocop.org/) for code style enforcement, following the [Ruby Style Guide](https://rubystyle.guide/) and [RSpec Style Guide](https://rspec.rubystyle.guide/).
+
+The configuration uses `StyleGuideBaseURL` to link cop violations directly to the relevant style guide sections, making it easier to understand and learn from the recommendations.
+
+Run RuboCop:
+```console
+$ bundle exec rake rubocop
+```
+
+Auto-correct offenses (safe):
+```console
+$ bundle exec rake rubocop:autocorrect
+```
+
+Auto-correct all offenses (safe and unsafe):
+```console
+$ bundle exec rake rubocop:autocorrect_all
+```
+
+Run both RuboCop and RSpec tests:
+```console
+$ bundle exec rake test
 ```

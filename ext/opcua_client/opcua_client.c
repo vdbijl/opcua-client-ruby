@@ -1,4 +1,5 @@
 #include <ruby.h>
+#include <ruby/encoding.h>
 #include "open62541.h"
 
 VALUE cClient;
@@ -27,9 +28,8 @@ static VALUE toRubyTime(UA_DateTime raw_date) {
     return rb_date;
 }
 
-static void
-handler_dataChanged(UA_Client *client, UA_UInt32 subId, void *subContext,
-                           UA_UInt32 monId, void *monContext, UA_DataValue *value) {
+static void handler_dataChanged(UA_Client *client, UA_UInt32 subId, void *subContext,
+		UA_UInt32 monId, void *monContext, UA_DataValue *value) {
 
     struct OpcuaClientContext *ctx = UA_Client_getContext(client);
     VALUE self = ctx->rubyClientInstance;
@@ -89,33 +89,34 @@ subscriptionInactivityCallback(UA_Client *client, UA_UInt32 subscriptionId, void
 }
 
 static void
-stateCallback (UA_Client *client, UA_ClientState clientState) {
+stateCallback (UA_Client *client, UA_SecureChannelState channelState,
+               UA_SessionState sessionState, UA_StatusCode connectStatus) {
     struct OpcuaClientContext *ctx = UA_Client_getContext(client);
 
-    switch(clientState) {
-        case UA_CLIENTSTATE_DISCONNECTED:
-            ; // printf("%s\n", "The client is disconnected");
+    /* Handle session state changes */
+    if(sessionState == UA_SESSIONSTATE_ACTIVATED) {
+        /* A new session was created! */
+        // printf("%s\n", "A new session was created!");
+        VALUE self = ctx->rubyClientInstance;
+
+        VALUE callback = rb_ivar_get(self, rb_intern("@callback_after_session_created"));
+        if (!NIL_P(callback)) {
+            VALUE params = rb_ary_new();
+            rb_ary_push(params, self);
+            rb_proc_call(callback, params); // rescue?
+        }
+    }
+
+    /* Handle channel state changes */
+    switch(channelState) {
+        case UA_SECURECHANNELSTATE_CLOSED:
+            ; // printf("%s\n", "The channel is closed");
             break;
-        case UA_CLIENTSTATE_CONNECTED:
-            ; // printf("%s\n", "A TCP connection to the server is open");
-            break;
-        case UA_CLIENTSTATE_SECURECHANNEL:
+        case UA_SECURECHANNELSTATE_OPEN:
             ; // printf("%s\n", "A SecureChannel to the server is open");
             break;
-        case UA_CLIENTSTATE_SESSION:
-            ; // printf("%s\n", "A new session was created!");
-            VALUE self = ctx->rubyClientInstance;
-
-            VALUE callback = rb_ivar_get(self, rb_intern("@callback_after_session_created"));
-            if (!NIL_P(callback)) {
-                VALUE params = rb_ary_new();
-                rb_ary_push(params, self);
-                rb_proc_call(callback, params); // rescue?
-            }
-
-            break;
-        case UA_CLIENTSTATE_SESSION_RENEWED:
-            /* The session was renewed. We don't need to recreate the subscription. */
+        case UA_SECURECHANNELSTATE_CLOSING:
+            ; // printf("%s\n", "The channel is closing");
             break;
     }
     return;
@@ -158,21 +159,51 @@ static VALUE allocate(VALUE klass) {
     return TypedData_Wrap_Struct(klass, &UA_Client_Type, uclient);
 }
 
+/* Custom logger that suppresses all output */
+static void silent_log(void *context, UA_LogLevel level, UA_LogCategory category,
+                      const char *msg, va_list args) {
+    /* Do nothing - suppress all log output */
+    (void)context;
+    (void)level;
+    (void)category;
+    (void)msg;
+    (void)args;
+}
+
+static UA_Logger silent_logger = {silent_log, NULL, NULL};
+
 static VALUE rb_initialize(VALUE self) {
     struct UninitializedClient * uclient;
     TypedData_Get_Struct(self, struct UninitializedClient, &UA_Client_Type, uclient);
 
-    UA_ClientConfig customConfig = UA_ClientConfig_default;
-    customConfig.stateCallback = stateCallback;
-    customConfig.subscriptionInactivityCallback = subscriptionInactivityCallback;
+    /* Create client with default configuration */
+    uclient->client = UA_Client_new();
+    if(!uclient->client) {
+        rb_raise(cError, "Failed to create UA_Client");
+        return Qnil;
+    }
 
+    /* Get the client config and set defaults */
+    UA_ClientConfig *config = UA_Client_getConfig(uclient->client);
+    UA_ClientConfig_setDefault(config);
+
+    /* Replace the logger with our silent logger */
+    config->logging = &silent_logger;
+
+    /* Also silence the EventLoop logger if it exists */
+    if(config->eventLoop) {
+        config->eventLoop->logger = &silent_logger;
+    }
+
+    /* Set custom callbacks */
+    config->stateCallback = stateCallback;
+    config->subscriptionInactivityCallback = subscriptionInactivityCallback;
+
+    /* Set up context */
     struct OpcuaClientContext *ctx = ALLOC(struct OpcuaClientContext);
     *ctx = (const struct OpcuaClientContext){ 0 };
-
     ctx->rubyClientInstance = self;
-    customConfig.clientContext = ctx;
-
-    uclient->client = UA_Client_new(customConfig);
+    config->clientContext = ctx;
 
     return Qnil;
 }
@@ -273,7 +304,7 @@ static UA_StatusCode multiRead(UA_Client *client, const UA_NodeId *nodeId, UA_Va
     }
 
     if(retval != UA_STATUSCODE_GOOD) {
-        UA_ReadResponse_deleteMembers(&response);
+        UA_ReadResponse_clear(&response);
         UA_free(rValues);
         return retval;
     }
@@ -283,7 +314,7 @@ static UA_StatusCode multiRead(UA_Client *client, const UA_NodeId *nodeId, UA_Va
 
     if (response.resultsSize != varsCount) {
         retval = UA_STATUSCODE_BADUNEXPECTEDERROR;
-        UA_ReadResponse_deleteMembers(&response);
+        UA_ReadResponse_clear(&response);
         UA_free(rValues);
         return retval;
     }
@@ -291,7 +322,7 @@ static UA_StatusCode multiRead(UA_Client *client, const UA_NodeId *nodeId, UA_Va
     for (int i=0; i<varsCount; i++) {
         if ((results[i].hasStatus && results[i].status != UA_STATUSCODE_GOOD) || !results[i].hasValue) {
             retval = UA_STATUSCODE_BADUNEXPECTEDERROR;
-            UA_ReadResponse_deleteMembers(&response);
+            UA_ReadResponse_clear(&response);
             UA_free(rValues);
             return retval;
         }
@@ -302,7 +333,7 @@ static UA_StatusCode multiRead(UA_Client *client, const UA_NodeId *nodeId, UA_Va
         UA_Variant_init(&results[i].value);
     }
 
-    UA_ReadResponse_deleteMembers(&response);
+    UA_ReadResponse_clear(&response);
     UA_free(rValues);
     return retval;
 }
@@ -353,7 +384,7 @@ static UA_StatusCode multiWrite(UA_Client *client, const UA_NodeId *nodeId, cons
         // printf("%s\n", "multiWrite: bad write");
     }
 
-    UA_WriteResponse_deleteMembers(&wResp);
+    UA_WriteResponse_clear(&wResp);
     UA_free(wValues);
 
     return retval;
@@ -431,7 +462,7 @@ static VALUE rb_readUaValues(VALUE self, VALUE v_nsIndex, VALUE v_aryNames) {
     } else {
         /* Clean up */
         for (int i=0; i<namesCount; i++) {
-            UA_Variant_deleteMembers(&readValues[i]);
+            UA_Variant_clear(&readValues[i]);
         }
         UA_free(nodes);
         UA_free(readValues);
@@ -441,7 +472,7 @@ static VALUE rb_readUaValues(VALUE self, VALUE v_nsIndex, VALUE v_aryNames) {
 
     /* Clean up */
     for (int i=0; i<namesCount; i++) {
-        UA_Variant_deleteMembers(&readValues[i]);
+        UA_Variant_clear(&readValues[i]);
     }
     UA_free(nodes);
     UA_free(readValues);
@@ -487,7 +518,19 @@ static VALUE rb_writeUaValues(VALUE self, VALUE v_nsIndex, VALUE v_aryNames, VAL
         char *name = StringValueCStr(v_name);
         nodes[i] = UA_NODEID_STRING(nsIndex, name);
 
-        if (uaType == UA_TYPES_UINT16) {
+        if (uaType == UA_TYPES_BYTE) {
+            Check_Type(v_newValue, T_FIXNUM);
+            UA_Byte newValue = NUM2CHR(v_newValue);
+            values[i].data = UA_malloc(sizeof(UA_Byte));
+            *(UA_Byte*)values[i].data = newValue;
+            values[i].type = &UA_TYPES[uaType];
+        } else if (uaType == UA_TYPES_SBYTE) {
+            Check_Type(v_newValue, T_FIXNUM);
+            UA_SByte newValue = NUM2INT(v_newValue);
+            values[i].data = UA_malloc(sizeof(UA_SByte));
+            *(UA_SByte*)values[i].data = newValue;
+            values[i].type = &UA_TYPES[uaType];
+        } else if (uaType == UA_TYPES_UINT16) {
             Check_Type(v_newValue, T_FIXNUM);
             UA_UInt16 newValue = NUM2USHORT(v_newValue);
             values[i].data = UA_malloc(sizeof(UA_UInt16));
@@ -511,11 +554,29 @@ static VALUE rb_writeUaValues(VALUE self, VALUE v_nsIndex, VALUE v_aryNames, VAL
             values[i].data = UA_malloc(sizeof(UA_Int32));
             *(UA_Int32*)values[i].data = newValue;
             values[i].type = &UA_TYPES[uaType];
+        } else if (uaType == UA_TYPES_INT64) {
+            Check_Type(v_newValue, T_FIXNUM);
+            UA_Int64 newValue = NUM2LL(v_newValue);
+            values[i].data = UA_malloc(sizeof(UA_Int64));
+            *(UA_Int64*)values[i].data = newValue;
+            values[i].type = &UA_TYPES[uaType];
+        } else if (uaType == UA_TYPES_UINT64) {
+            Check_Type(v_newValue, T_FIXNUM);
+            UA_UInt64 newValue = NUM2ULL(v_newValue);
+            values[i].data = UA_malloc(sizeof(UA_UInt64));
+            *(UA_UInt64*)values[i].data = newValue;
+            values[i].type = &UA_TYPES[uaType];
         } else if (uaType == UA_TYPES_FLOAT) {
             Check_Type(v_newValue, T_FLOAT);
             UA_Float newValue = NUM2DBL(v_newValue);
             values[i].data = UA_malloc(sizeof(UA_Float));
             *(UA_Float*)values[i].data = newValue;
+            values[i].type = &UA_TYPES[uaType];
+        } else if (uaType == UA_TYPES_DOUBLE) {
+            Check_Type(v_newValue, T_FLOAT);
+            UA_Double newValue = NUM2DBL(v_newValue);
+            values[i].data = UA_malloc(sizeof(UA_Double));
+            *(UA_Double*)values[i].data = newValue;
             values[i].type = &UA_TYPES[uaType];
         } else if (uaType == UA_TYPES_BOOLEAN) {
             if (RB_TYPE_P(v_newValue, T_TRUE) != 1 && RB_TYPE_P(v_newValue, T_FALSE) != 1) {
@@ -537,7 +598,7 @@ static VALUE rb_writeUaValues(VALUE self, VALUE v_nsIndex, VALUE v_aryNames, VAL
     } else {
         /* Clean up */
         for (int i=0; i<namesCount; i++) {
-            UA_Variant_deleteMembers(&values[i]);
+            UA_Variant_clear(&values[i]);
         }
         UA_free(nodes);
         UA_free(values);
@@ -547,7 +608,7 @@ static VALUE rb_writeUaValues(VALUE self, VALUE v_nsIndex, VALUE v_aryNames, VAL
 
     /* Clean up */
     for (int i=0; i<namesCount; i++) {
-        UA_Variant_deleteMembers(&values[i]);
+        UA_Variant_clear(&values[i]);
     }
     UA_free(nodes);
     UA_free(values);
@@ -578,7 +639,17 @@ static VALUE rb_writeUaValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_
     UA_Variant value;
     UA_Variant_init(&value);
 
-    if (uaType == UA_TYPES_INT16) {
+    if (uaType == UA_TYPES_BYTE) {
+        UA_Byte newValue = NUM2CHR(v_newValue);
+        value.data = UA_malloc(sizeof(UA_Byte));
+        *(UA_Byte*)value.data = newValue;
+        value.type = &UA_TYPES[UA_TYPES_BYTE];
+    } else if (uaType == UA_TYPES_SBYTE) {
+        UA_SByte newValue = NUM2INT(v_newValue);
+        value.data = UA_malloc(sizeof(UA_SByte));
+        *(UA_SByte*)value.data = newValue;
+        value.type = &UA_TYPES[UA_TYPES_SBYTE];
+    } else if (uaType == UA_TYPES_INT16) {
         UA_Int16 newValue = NUM2SHORT(v_newValue);
         value.data = UA_malloc(sizeof(UA_Int16));
         *(UA_Int16*)value.data = newValue;
@@ -598,16 +669,37 @@ static VALUE rb_writeUaValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_
         value.data = UA_malloc(sizeof(UA_UInt32));
         *(UA_UInt32*)value.data = newValue;
         value.type = &UA_TYPES[UA_TYPES_UINT32];
+    } else if (uaType == UA_TYPES_INT64) {
+        UA_Int64 newValue = NUM2LL(v_newValue);
+        value.data = UA_malloc(sizeof(UA_Int64));
+        *(UA_Int64*)value.data = newValue;
+        value.type = &UA_TYPES[UA_TYPES_INT64];
+    } else if (uaType == UA_TYPES_UINT64) {
+        UA_UInt64 newValue = NUM2ULL(v_newValue);
+        value.data = UA_malloc(sizeof(UA_UInt64));
+        *(UA_UInt64*)value.data = newValue;
+        value.type = &UA_TYPES[UA_TYPES_UINT64];
     } else if (uaType == UA_TYPES_FLOAT) {
         UA_Float newValue = NUM2DBL(v_newValue);
         value.data = UA_malloc(sizeof(UA_Float));
         *(UA_Float*)value.data = newValue;
         value.type = &UA_TYPES[UA_TYPES_FLOAT];
+    } else if (uaType == UA_TYPES_DOUBLE) {
+        UA_Double newValue = NUM2DBL(v_newValue);
+        value.data = UA_malloc(sizeof(UA_Double));
+        *(UA_Double*)value.data = newValue;
+        value.type = &UA_TYPES[UA_TYPES_DOUBLE];
     } else if (uaType == UA_TYPES_BOOLEAN) {
         UA_Boolean newValue = RTEST(v_newValue);
         value.data = UA_malloc(sizeof(UA_Boolean));
         *(UA_Boolean*)value.data = newValue;
         value.type = &UA_TYPES[UA_TYPES_BOOLEAN];
+    } else if (uaType == UA_TYPES_STRING) {
+        char *str = StringValueCStr(v_newValue);
+        UA_String *uaString = UA_malloc(sizeof(UA_String));
+        *uaString = UA_STRING_ALLOC(str);
+        value.data = uaString;
+        value.type = &UA_TYPES[UA_TYPES_STRING];
     } else {
         rb_raise(cError, "Unsupported type");
     }
@@ -618,14 +710,165 @@ static VALUE rb_writeUaValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_
         // printf("%s\n", "value write successful");
     } else {
         /* Clean up */
-        UA_Variant_deleteMembers(&value);
+        UA_Variant_clear(&value);
         return raise_ua_status_error(status);
     }
 
     /* Clean up */
-    UA_Variant_deleteMembers(&value);
+    UA_Variant_clear(&value);
 
     return Qnil;
+}
+
+static VALUE rb_writeUaArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_newArray, UA_UInt32 uaType) {
+    struct UninitializedClient *uclient;
+    TypedData_Get_Struct(self, struct UninitializedClient, &UA_Client_Type, uclient);
+
+    UA_Client *client = uclient->client;
+
+    /* NodeId */
+    UA_Int16 nsIndex = NUM2INT(v_nsIndex);
+    char *name = StringValueCStr(v_name);
+
+    /* Check that v_newArray is an array */
+    Check_Type(v_newArray, T_ARRAY);
+    long arrayLength = RARRAY_LEN(v_newArray);
+
+    /* Prepare variant */
+    UA_Variant value;
+    UA_Variant_init(&value);
+
+    /* Allocate and populate array based on type */
+    if (uaType == UA_TYPES_BYTE) {
+        UA_Byte *array = (UA_Byte*)UA_malloc(sizeof(UA_Byte) * arrayLength);
+        for (long i = 0; i < arrayLength; i++) {
+            VALUE elem = rb_ary_entry(v_newArray, i);
+            array[i] = NUM2CHR(elem);
+        }
+        UA_Variant_setArrayCopy(&value, array, arrayLength, &UA_TYPES[UA_TYPES_BYTE]);
+        UA_free(array);
+    } else if (uaType == UA_TYPES_SBYTE) {
+        UA_SByte *array = (UA_SByte*)UA_malloc(sizeof(UA_SByte) * arrayLength);
+        for (long i = 0; i < arrayLength; i++) {
+            VALUE elem = rb_ary_entry(v_newArray, i);
+            array[i] = NUM2INT(elem);
+        }
+        UA_Variant_setArrayCopy(&value, array, arrayLength, &UA_TYPES[UA_TYPES_SBYTE]);
+        UA_free(array);
+    } else if (uaType == UA_TYPES_INT16) {
+        UA_Int16 *array = (UA_Int16*)UA_malloc(sizeof(UA_Int16) * arrayLength);
+        for (long i = 0; i < arrayLength; i++) {
+            VALUE elem = rb_ary_entry(v_newArray, i);
+            array[i] = NUM2SHORT(elem);
+        }
+        UA_Variant_setArrayCopy(&value, array, arrayLength, &UA_TYPES[UA_TYPES_INT16]);
+        UA_free(array);
+    } else if (uaType == UA_TYPES_UINT16) {
+        UA_UInt16 *array = (UA_UInt16*)UA_malloc(sizeof(UA_UInt16) * arrayLength);
+        for (long i = 0; i < arrayLength; i++) {
+            VALUE elem = rb_ary_entry(v_newArray, i);
+            array[i] = NUM2USHORT(elem);
+        }
+        UA_Variant_setArrayCopy(&value, array, arrayLength, &UA_TYPES[UA_TYPES_UINT16]);
+        UA_free(array);
+    } else if (uaType == UA_TYPES_INT32) {
+        UA_Int32 *array = (UA_Int32*)UA_malloc(sizeof(UA_Int32) * arrayLength);
+        for (long i = 0; i < arrayLength; i++) {
+            VALUE elem = rb_ary_entry(v_newArray, i);
+            array[i] = NUM2INT(elem);
+        }
+        UA_Variant_setArrayCopy(&value, array, arrayLength, &UA_TYPES[UA_TYPES_INT32]);
+        UA_free(array);
+    } else if (uaType == UA_TYPES_UINT32) {
+        UA_UInt32 *array = (UA_UInt32*)UA_malloc(sizeof(UA_UInt32) * arrayLength);
+        for (long i = 0; i < arrayLength; i++) {
+            VALUE elem = rb_ary_entry(v_newArray, i);
+            array[i] = NUM2UINT(elem);
+        }
+        UA_Variant_setArrayCopy(&value, array, arrayLength, &UA_TYPES[UA_TYPES_UINT32]);
+        UA_free(array);
+    } else if (uaType == UA_TYPES_INT64) {
+        UA_Int64 *array = (UA_Int64*)UA_malloc(sizeof(UA_Int64) * arrayLength);
+        for (long i = 0; i < arrayLength; i++) {
+            VALUE elem = rb_ary_entry(v_newArray, i);
+            array[i] = NUM2LL(elem);
+        }
+        UA_Variant_setArrayCopy(&value, array, arrayLength, &UA_TYPES[UA_TYPES_INT64]);
+        UA_free(array);
+    } else if (uaType == UA_TYPES_UINT64) {
+        UA_UInt64 *array = (UA_UInt64*)UA_malloc(sizeof(UA_UInt64) * arrayLength);
+        for (long i = 0; i < arrayLength; i++) {
+            VALUE elem = rb_ary_entry(v_newArray, i);
+            array[i] = NUM2ULL(elem);
+        }
+        UA_Variant_setArrayCopy(&value, array, arrayLength, &UA_TYPES[UA_TYPES_UINT64]);
+        UA_free(array);
+    } else if (uaType == UA_TYPES_FLOAT) {
+        UA_Float *array = (UA_Float*)UA_malloc(sizeof(UA_Float) * arrayLength);
+        for (long i = 0; i < arrayLength; i++) {
+            VALUE elem = rb_ary_entry(v_newArray, i);
+            array[i] = NUM2DBL(elem);
+        }
+        UA_Variant_setArrayCopy(&value, array, arrayLength, &UA_TYPES[UA_TYPES_FLOAT]);
+        UA_free(array);
+    } else if (uaType == UA_TYPES_DOUBLE) {
+        UA_Double *array = (UA_Double*)UA_malloc(sizeof(UA_Double) * arrayLength);
+        for (long i = 0; i < arrayLength; i++) {
+            VALUE elem = rb_ary_entry(v_newArray, i);
+            array[i] = NUM2DBL(elem);
+        }
+        UA_Variant_setArrayCopy(&value, array, arrayLength, &UA_TYPES[UA_TYPES_DOUBLE]);
+        UA_free(array);
+    } else if (uaType == UA_TYPES_BOOLEAN) {
+        UA_Boolean *array = (UA_Boolean*)UA_malloc(sizeof(UA_Boolean) * arrayLength);
+        for (long i = 0; i < arrayLength; i++) {
+            VALUE elem = rb_ary_entry(v_newArray, i);
+            array[i] = RTEST(elem);
+        }
+        UA_Variant_setArrayCopy(&value, array, arrayLength, &UA_TYPES[UA_TYPES_BOOLEAN]);
+        UA_free(array);
+    } else if (uaType == UA_TYPES_STRING) {
+        UA_String *array = (UA_String*)UA_malloc(sizeof(UA_String) * arrayLength);
+        for (long i = 0; i < arrayLength; i++) {
+            VALUE elem = rb_ary_entry(v_newArray, i);
+            char *str = StringValueCStr(elem);
+            array[i] = UA_STRING_ALLOC(str);
+        }
+        UA_Variant_setArrayCopy(&value, array, arrayLength, &UA_TYPES[UA_TYPES_STRING]);
+        for (long i = 0; i < arrayLength; i++) {
+            UA_String_clear(&array[i]);
+        }
+        UA_free(array);
+    } else {
+        rb_raise(cError, "Unsupported type");
+        return Qnil;
+    }
+
+    UA_StatusCode status = UA_Client_writeValueAttribute(client, UA_NODEID_STRING(nsIndex, name), &value);
+
+    if (status != UA_STATUSCODE_GOOD) {
+        UA_Variant_clear(&value);
+        return raise_ua_status_error(status);
+    }
+
+    UA_Variant_clear(&value);
+    return Qnil;
+}
+
+static VALUE rb_writeByteValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_newValue) {
+    return rb_writeUaValue(self, v_nsIndex, v_name, v_newValue, UA_TYPES_BYTE);
+}
+
+static VALUE rb_writeByteValues(VALUE self, VALUE v_nsIndex, VALUE v_aryNames, VALUE v_aryNewValues) {
+    return rb_writeUaValues(self, v_nsIndex, v_aryNames, v_aryNewValues, UA_TYPES_BYTE);
+}
+
+static VALUE rb_writeSByteValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_newValue) {
+    return rb_writeUaValue(self, v_nsIndex, v_name, v_newValue, UA_TYPES_SBYTE);
+}
+
+static VALUE rb_writeSByteValues(VALUE self, VALUE v_nsIndex, VALUE v_aryNames, VALUE v_aryNewValues) {
+    return rb_writeUaValues(self, v_nsIndex, v_aryNames, v_aryNewValues, UA_TYPES_SBYTE);
 }
 
 static VALUE rb_writeUInt16Value(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_newValue) {
@@ -660,6 +903,22 @@ static VALUE rb_writeUInt32Values(VALUE self, VALUE v_nsIndex, VALUE v_aryNames,
     return rb_writeUaValues(self, v_nsIndex, v_aryNames, v_aryNewValues, UA_TYPES_UINT32);
 }
 
+static VALUE rb_writeInt64Value(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_newValue) {
+    return rb_writeUaValue(self, v_nsIndex, v_name, v_newValue, UA_TYPES_INT64);
+}
+
+static VALUE rb_writeInt64Values(VALUE self, VALUE v_nsIndex, VALUE v_aryNames, VALUE v_aryNewValues) {
+    return rb_writeUaValues(self, v_nsIndex, v_aryNames, v_aryNewValues, UA_TYPES_INT64);
+}
+
+static VALUE rb_writeUInt64Value(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_newValue) {
+    return rb_writeUaValue(self, v_nsIndex, v_name, v_newValue, UA_TYPES_UINT64);
+}
+
+static VALUE rb_writeUInt64Values(VALUE self, VALUE v_nsIndex, VALUE v_aryNames, VALUE v_aryNewValues) {
+    return rb_writeUaValues(self, v_nsIndex, v_aryNames, v_aryNewValues, UA_TYPES_UINT64);
+}
+
 static VALUE rb_writeBooleanValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_newValue) {
     return rb_writeUaValue(self, v_nsIndex, v_name, v_newValue, UA_TYPES_BOOLEAN);
 }
@@ -674,6 +933,67 @@ static VALUE rb_writeFloatValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE
 
 static VALUE rb_writeFloatValues(VALUE self, VALUE v_nsIndex, VALUE v_aryNames, VALUE v_aryNewValues) {
     return rb_writeUaValues(self, v_nsIndex, v_aryNames, v_aryNewValues, UA_TYPES_FLOAT);
+}
+
+static VALUE rb_writeDoubleValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_newValue) {
+    return rb_writeUaValue(self, v_nsIndex, v_name, v_newValue, UA_TYPES_DOUBLE);
+}
+
+static VALUE rb_writeDoubleValues(VALUE self, VALUE v_nsIndex, VALUE v_aryNames, VALUE v_aryNewValues) {
+    return rb_writeUaValues(self, v_nsIndex, v_aryNames, v_aryNewValues, UA_TYPES_DOUBLE);
+}
+
+static VALUE rb_writeStringValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_newValue) {
+    return rb_writeUaValue(self, v_nsIndex, v_name, v_newValue, UA_TYPES_STRING);
+}
+
+// Array write wrapper functions
+static VALUE rb_writeByteArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_newArray) {
+    return rb_writeUaArrayValue(self, v_nsIndex, v_name, v_newArray, UA_TYPES_BYTE);
+}
+
+static VALUE rb_writeSByteArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_newArray) {
+    return rb_writeUaArrayValue(self, v_nsIndex, v_name, v_newArray, UA_TYPES_SBYTE);
+}
+
+static VALUE rb_writeInt16ArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_newArray) {
+    return rb_writeUaArrayValue(self, v_nsIndex, v_name, v_newArray, UA_TYPES_INT16);
+}
+
+static VALUE rb_writeUInt16ArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_newArray) {
+    return rb_writeUaArrayValue(self, v_nsIndex, v_name, v_newArray, UA_TYPES_UINT16);
+}
+
+static VALUE rb_writeInt32ArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_newArray) {
+    return rb_writeUaArrayValue(self, v_nsIndex, v_name, v_newArray, UA_TYPES_INT32);
+}
+
+static VALUE rb_writeUInt32ArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_newArray) {
+    return rb_writeUaArrayValue(self, v_nsIndex, v_name, v_newArray, UA_TYPES_UINT32);
+}
+
+static VALUE rb_writeInt64ArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_newArray) {
+    return rb_writeUaArrayValue(self, v_nsIndex, v_name, v_newArray, UA_TYPES_INT64);
+}
+
+static VALUE rb_writeUInt64ArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_newArray) {
+    return rb_writeUaArrayValue(self, v_nsIndex, v_name, v_newArray, UA_TYPES_UINT64);
+}
+
+static VALUE rb_writeFloatArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_newArray) {
+    return rb_writeUaArrayValue(self, v_nsIndex, v_name, v_newArray, UA_TYPES_FLOAT);
+}
+
+static VALUE rb_writeDoubleArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_newArray) {
+    return rb_writeUaArrayValue(self, v_nsIndex, v_name, v_newArray, UA_TYPES_DOUBLE);
+}
+
+static VALUE rb_writeBooleanArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_newArray) {
+    return rb_writeUaArrayValue(self, v_nsIndex, v_name, v_newArray, UA_TYPES_BOOLEAN);
+}
+
+static VALUE rb_writeStringArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name, VALUE v_newArray) {
+    return rb_writeUaArrayValue(self, v_nsIndex, v_name, v_newArray, UA_TYPES_STRING);
 }
 
 static VALUE rb_readUaValue(VALUE self, VALUE v_nsIndex, VALUE v_name, int type) {
@@ -700,13 +1020,19 @@ static VALUE rb_readUaValue(VALUE self, VALUE v_nsIndex, VALUE v_name, int type)
         // printf("%s\n", "value read successful");
     } else {
         /* Clean up */
-        UA_Variant_deleteMembers(&value);
+        UA_Variant_clear(&value);
         return raise_ua_status_error(status);
     }
 
     VALUE result = Qnil;
 
-    if (type == UA_TYPES_INT16 && UA_Variant_hasScalarType(&value, &UA_TYPES[UA_TYPES_INT16])) {
+    if (type == UA_TYPES_BYTE && UA_Variant_hasScalarType(&value, &UA_TYPES[UA_TYPES_BYTE])) {
+        UA_Byte val =*(UA_Byte*)value.data;
+        result = INT2FIX(val);
+    } else if (type == UA_TYPES_SBYTE && UA_Variant_hasScalarType(&value, &UA_TYPES[UA_TYPES_SBYTE])) {
+        UA_SByte val =*(UA_SByte*)value.data;
+        result = INT2FIX(val);
+    } else if (type == UA_TYPES_INT16 && UA_Variant_hasScalarType(&value, &UA_TYPES[UA_TYPES_INT16])) {
         UA_Int16 val =*(UA_Int16*)value.data;
         // printf("the value is: %i\n", val);
         result = INT2FIX(val);
@@ -720,21 +1046,143 @@ static VALUE rb_readUaValue(VALUE self, VALUE v_nsIndex, VALUE v_name, int type)
     } else if (type == UA_TYPES_UINT32 && UA_Variant_hasScalarType(&value, &UA_TYPES[UA_TYPES_UINT32])) {
         UA_UInt32 val =*(UA_UInt32*)value.data;
         result = INT2FIX(val);
+    } else if (type == UA_TYPES_INT64 && UA_Variant_hasScalarType(&value, &UA_TYPES[UA_TYPES_INT64])) {
+        UA_Int64 val =*(UA_Int64*)value.data;
+        result = LL2NUM(val);
+    } else if (type == UA_TYPES_UINT64 && UA_Variant_hasScalarType(&value, &UA_TYPES[UA_TYPES_UINT64])) {
+        UA_UInt64 val =*(UA_UInt64*)value.data;
+        result = ULL2NUM(val);
     } else if (type == UA_TYPES_BOOLEAN && UA_Variant_hasScalarType(&value, &UA_TYPES[UA_TYPES_BOOLEAN])) {
         UA_Boolean val =*(UA_Boolean*)value.data;
         result = val ? Qtrue : Qfalse;
     } else if (type == UA_TYPES_FLOAT && UA_Variant_hasScalarType(&value, &UA_TYPES[UA_TYPES_FLOAT])) {
         UA_Float val =*(UA_Float*)value.data;
         result = DBL2NUM(val);
+    } else if (type == UA_TYPES_DOUBLE && UA_Variant_hasScalarType(&value, &UA_TYPES[UA_TYPES_DOUBLE])) {
+        UA_Double val =*(UA_Double*)value.data;
+        result = DBL2NUM(val);
+    } else if (type == UA_TYPES_STRING && UA_Variant_hasScalarType(&value, &UA_TYPES[UA_TYPES_STRING])) {
+        UA_String *val = (UA_String*)value.data;
+        result = rb_enc_str_new((char*)val->data, val->length, rb_utf8_encoding());
     } else {
         rb_raise(cError, "UA type mismatch");
         return Qnil;
     }
 
     /* Clean up */
-    UA_Variant_deleteMembers(&value);
+    UA_Variant_clear(&value);
 
     return result;
+}
+
+static VALUE rb_readUaArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name, UA_UInt32 type) {
+    struct UninitializedClient *uclient;
+    TypedData_Get_Struct(self, struct UninitializedClient, &UA_Client_Type, uclient);
+
+    UA_Client *client = uclient->client;
+
+    /* NodeId */
+    UA_Int16 nsIndex = NUM2INT(v_nsIndex);
+    char *name = StringValueCStr(v_name);
+    UA_NodeId nodeId = UA_NODEID_STRING(nsIndex, name);
+
+    /* Read the value attribute */
+    UA_Variant value;
+    UA_Variant_init(&value);
+    UA_StatusCode retval = UA_Client_readValueAttribute(client, nodeId, &value);
+
+    if (retval != UA_STATUSCODE_GOOD) {
+        rb_raise(cError, "Could not read node");
+        return Qnil;
+    }
+
+    /* Check if it's an array */
+    if (!UA_Variant_isScalar(&value)) {
+        /* It's an array */
+        VALUE result = rb_ary_new();
+        size_t arrayLength = value.arrayLength;
+
+        if (type == UA_TYPES_BYTE && value.type == &UA_TYPES[UA_TYPES_BYTE]) {
+            UA_Byte *array = (UA_Byte*)value.data;
+            for (size_t i = 0; i < arrayLength; i++) {
+                rb_ary_push(result, INT2FIX(array[i]));
+            }
+        } else if (type == UA_TYPES_SBYTE && value.type == &UA_TYPES[UA_TYPES_SBYTE]) {
+            UA_SByte *array = (UA_SByte*)value.data;
+            for (size_t i = 0; i < arrayLength; i++) {
+                rb_ary_push(result, INT2FIX(array[i]));
+            }
+        } else if (type == UA_TYPES_INT16 && value.type == &UA_TYPES[UA_TYPES_INT16]) {
+            UA_Int16 *array = (UA_Int16*)value.data;
+            for (size_t i = 0; i < arrayLength; i++) {
+                rb_ary_push(result, INT2FIX(array[i]));
+            }
+        } else if (type == UA_TYPES_UINT16 && value.type == &UA_TYPES[UA_TYPES_UINT16]) {
+            UA_UInt16 *array = (UA_UInt16*)value.data;
+            for (size_t i = 0; i < arrayLength; i++) {
+                rb_ary_push(result, INT2FIX(array[i]));
+            }
+        } else if (type == UA_TYPES_INT32 && value.type == &UA_TYPES[UA_TYPES_INT32]) {
+            UA_Int32 *array = (UA_Int32*)value.data;
+            for (size_t i = 0; i < arrayLength; i++) {
+                rb_ary_push(result, INT2FIX(array[i]));
+            }
+        } else if (type == UA_TYPES_UINT32 && value.type == &UA_TYPES[UA_TYPES_UINT32]) {
+            UA_UInt32 *array = (UA_UInt32*)value.data;
+            for (size_t i = 0; i < arrayLength; i++) {
+                rb_ary_push(result, INT2FIX(array[i]));
+            }
+        } else if (type == UA_TYPES_INT64 && value.type == &UA_TYPES[UA_TYPES_INT64]) {
+            UA_Int64 *array = (UA_Int64*)value.data;
+            for (size_t i = 0; i < arrayLength; i++) {
+                rb_ary_push(result, LL2NUM(array[i]));
+            }
+        } else if (type == UA_TYPES_UINT64 && value.type == &UA_TYPES[UA_TYPES_UINT64]) {
+            UA_UInt64 *array = (UA_UInt64*)value.data;
+            for (size_t i = 0; i < arrayLength; i++) {
+                rb_ary_push(result, ULL2NUM(array[i]));
+            }
+        } else if (type == UA_TYPES_BOOLEAN && value.type == &UA_TYPES[UA_TYPES_BOOLEAN]) {
+            UA_Boolean *array = (UA_Boolean*)value.data;
+            for (size_t i = 0; i < arrayLength; i++) {
+                rb_ary_push(result, array[i] ? Qtrue : Qfalse);
+            }
+        } else if (type == UA_TYPES_FLOAT && value.type == &UA_TYPES[UA_TYPES_FLOAT]) {
+            UA_Float *array = (UA_Float*)value.data;
+            for (size_t i = 0; i < arrayLength; i++) {
+                rb_ary_push(result, DBL2NUM(array[i]));
+            }
+        } else if (type == UA_TYPES_DOUBLE && value.type == &UA_TYPES[UA_TYPES_DOUBLE]) {
+            UA_Double *array = (UA_Double*)value.data;
+            for (size_t i = 0; i < arrayLength; i++) {
+                rb_ary_push(result, DBL2NUM(array[i]));
+            }
+        } else if (type == UA_TYPES_STRING && value.type == &UA_TYPES[UA_TYPES_STRING]) {
+            UA_String *array = (UA_String*)value.data;
+            for (size_t i = 0; i < arrayLength; i++) {
+                rb_ary_push(result, rb_enc_str_new((char*)array[i].data, array[i].length, rb_utf8_encoding()));
+            }
+        } else {
+            UA_Variant_clear(&value);
+            rb_raise(cError, "UA type mismatch");
+            return Qnil;
+        }
+
+        UA_Variant_clear(&value);
+        return result;
+    } else {
+        UA_Variant_clear(&value);
+        rb_raise(cError, "Expected array but got scalar value");
+        return Qnil;
+    }
+}
+
+static VALUE rb_readByteValue(VALUE self, VALUE v_nsIndex, VALUE v_name) {
+    return rb_readUaValue(self, v_nsIndex, v_name, UA_TYPES_BYTE);
+}
+
+static VALUE rb_readSByteValue(VALUE self, VALUE v_nsIndex, VALUE v_name) {
+    return rb_readUaValue(self, v_nsIndex, v_name, UA_TYPES_SBYTE);
 }
 
 static VALUE rb_readInt16Value(VALUE self, VALUE v_nsIndex, VALUE v_name) {
@@ -753,12 +1201,77 @@ static VALUE rb_readUInt32Value(VALUE self, VALUE v_nsIndex, VALUE v_name) {
     return rb_readUaValue(self, v_nsIndex, v_name, UA_TYPES_UINT32);
 }
 
+static VALUE rb_readInt64Value(VALUE self, VALUE v_nsIndex, VALUE v_name) {
+    return rb_readUaValue(self, v_nsIndex, v_name, UA_TYPES_INT64);
+}
+
+static VALUE rb_readUInt64Value(VALUE self, VALUE v_nsIndex, VALUE v_name) {
+    return rb_readUaValue(self, v_nsIndex, v_name, UA_TYPES_UINT64);
+}
+
 static VALUE rb_readBooleanValue(VALUE self, VALUE v_nsIndex, VALUE v_name) {
     return rb_readUaValue(self, v_nsIndex, v_name, UA_TYPES_BOOLEAN);
 }
 
 static VALUE rb_readFloatValue(VALUE self, VALUE v_nsIndex, VALUE v_name) {
     return rb_readUaValue(self, v_nsIndex, v_name, UA_TYPES_FLOAT);
+}
+
+static VALUE rb_readDoubleValue(VALUE self, VALUE v_nsIndex, VALUE v_name) {
+    return rb_readUaValue(self, v_nsIndex, v_name, UA_TYPES_DOUBLE);
+}
+
+static VALUE rb_readStringValue(VALUE self, VALUE v_nsIndex, VALUE v_name) {
+    return rb_readUaValue(self, v_nsIndex, v_name, UA_TYPES_STRING);
+}
+
+// Array read wrapper functions
+static VALUE rb_readByteArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name) {
+    return rb_readUaArrayValue(self, v_nsIndex, v_name, UA_TYPES_BYTE);
+}
+
+static VALUE rb_readSByteArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name) {
+    return rb_readUaArrayValue(self, v_nsIndex, v_name, UA_TYPES_SBYTE);
+}
+
+static VALUE rb_readInt16ArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name) {
+    return rb_readUaArrayValue(self, v_nsIndex, v_name, UA_TYPES_INT16);
+}
+
+static VALUE rb_readUInt16ArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name) {
+    return rb_readUaArrayValue(self, v_nsIndex, v_name, UA_TYPES_UINT16);
+}
+
+static VALUE rb_readInt32ArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name) {
+    return rb_readUaArrayValue(self, v_nsIndex, v_name, UA_TYPES_INT32);
+}
+
+static VALUE rb_readUInt32ArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name) {
+    return rb_readUaArrayValue(self, v_nsIndex, v_name, UA_TYPES_UINT32);
+}
+
+static VALUE rb_readInt64ArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name) {
+    return rb_readUaArrayValue(self, v_nsIndex, v_name, UA_TYPES_INT64);
+}
+
+static VALUE rb_readUInt64ArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name) {
+    return rb_readUaArrayValue(self, v_nsIndex, v_name, UA_TYPES_UINT64);
+}
+
+static VALUE rb_readBooleanArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name) {
+    return rb_readUaArrayValue(self, v_nsIndex, v_name, UA_TYPES_BOOLEAN);
+}
+
+static VALUE rb_readFloatArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name) {
+    return rb_readUaArrayValue(self, v_nsIndex, v_name, UA_TYPES_FLOAT);
+}
+
+static VALUE rb_readDoubleArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name) {
+    return rb_readUaArrayValue(self, v_nsIndex, v_name, UA_TYPES_DOUBLE);
+}
+
+static VALUE rb_readStringArrayValue(VALUE self, VALUE v_nsIndex, VALUE v_name) {
+    return rb_readUaArrayValue(self, v_nsIndex, v_name, UA_TYPES_STRING);
 }
 
 static VALUE rb_get_human_UA_StatusCode(VALUE self, VALUE v_code) {
@@ -776,7 +1289,7 @@ static VALUE rb_run_single_monitoring_cycle(VALUE self) {
     TypedData_Get_Struct(self, struct UninitializedClient, &UA_Client_Type, uclient);
     UA_Client *client = uclient->client;
 
-    UA_StatusCode status = UA_Client_runAsync(client, 1000);
+    UA_StatusCode status = UA_Client_run_iterate(client, 1000);
     return UINT2NUM(status);
 }
 
@@ -785,7 +1298,7 @@ static VALUE rb_run_single_monitoring_cycle_bang(VALUE self) {
     TypedData_Get_Struct(self, struct UninitializedClient, &UA_Client_Type, uclient);
     UA_Client *client = uclient->client;
 
-    UA_StatusCode status = UA_Client_runAsync(client, 1000);
+    UA_StatusCode status = UA_Client_run_iterate(client, 1000);
 
     if (status != UA_STATUSCODE_GOOD) {
         return raise_ua_status_error(status);
@@ -799,16 +1312,28 @@ static VALUE rb_state(VALUE self) {
     TypedData_Get_Struct(self, struct UninitializedClient, &UA_Client_Type, uclient);
     UA_Client *client = uclient->client;
 
-    UA_ClientState state = UA_Client_getState(client);
-    return INT2NUM(state);
+    UA_SecureChannelState channelState;
+    UA_SessionState sessionState;
+    UA_StatusCode connectStatus;
+    UA_Client_getState(client, &channelState, &sessionState, &connectStatus);
+
+    /* Return session state as the primary state indicator */
+    return INT2NUM(sessionState);
 }
 
 static void defineStateContants(VALUE mOPCUAClient) {
-    rb_define_const(mOPCUAClient, "UA_CLIENTSTATE_DISCONNECTED", INT2NUM(UA_CLIENTSTATE_DISCONNECTED));
-    rb_define_const(mOPCUAClient, "UA_CLIENTSTATE_CONNECTED", INT2NUM(UA_CLIENTSTATE_CONNECTED));
-    rb_define_const(mOPCUAClient, "UA_CLIENTSTATE_SECURECHANNEL", INT2NUM(UA_CLIENTSTATE_SECURECHANNEL));
-    rb_define_const(mOPCUAClient, "UA_CLIENTSTATE_SESSION", INT2NUM(UA_CLIENTSTATE_SESSION));
-    rb_define_const(mOPCUAClient, "UA_CLIENTSTATE_SESSION_RENEWED", INT2NUM(UA_CLIENTSTATE_SESSION_RENEWED));
+    /* Session state constants */
+    rb_define_const(mOPCUAClient, "UA_SESSIONSTATE_CLOSED", INT2NUM(UA_SESSIONSTATE_CLOSED));
+    rb_define_const(mOPCUAClient, "UA_SESSIONSTATE_CREATE_REQUESTED", INT2NUM(UA_SESSIONSTATE_CREATE_REQUESTED));
+    rb_define_const(mOPCUAClient, "UA_SESSIONSTATE_CREATED", INT2NUM(UA_SESSIONSTATE_CREATED));
+    rb_define_const(mOPCUAClient, "UA_SESSIONSTATE_ACTIVATE_REQUESTED", INT2NUM(UA_SESSIONSTATE_ACTIVATE_REQUESTED));
+    rb_define_const(mOPCUAClient, "UA_SESSIONSTATE_ACTIVATED", INT2NUM(UA_SESSIONSTATE_ACTIVATED));
+    rb_define_const(mOPCUAClient, "UA_SESSIONSTATE_CLOSING", INT2NUM(UA_SESSIONSTATE_CLOSING));
+
+    /* Secure channel state constants */
+    rb_define_const(mOPCUAClient, "UA_SECURECHANNELSTATE_CLOSED", INT2NUM(UA_SECURECHANNELSTATE_CLOSED));
+    rb_define_const(mOPCUAClient, "UA_SECURECHANNELSTATE_OPEN", INT2NUM(UA_SECURECHANNELSTATE_OPEN));
+    rb_define_const(mOPCUAClient, "UA_SECURECHANNELSTATE_CLOSING", INT2NUM(UA_SECURECHANNELSTATE_CLOSING));
 }
 
 void Init_opcua_client()
@@ -842,27 +1367,89 @@ void Init_opcua_client()
     rb_define_method(cClient, "disconnect", rb_disconnect, 0);
     rb_define_method(cClient, "state", rb_state, 0);
 
+    rb_define_method(cClient, "read_byte", rb_readByteValue, 2);
+    rb_define_method(cClient, "read_sbyte", rb_readSByteValue, 2);
     rb_define_method(cClient, "read_int16", rb_readInt16Value, 2);
     rb_define_method(cClient, "read_uint16", rb_readUInt16Value, 2);
     rb_define_method(cClient, "read_int32", rb_readInt32Value, 2);
     rb_define_method(cClient, "read_uint32", rb_readUInt32Value, 2);
+    rb_define_method(cClient, "read_int64", rb_readInt64Value, 2);
+    rb_define_method(cClient, "read_uint64", rb_readUInt64Value, 2);
     rb_define_method(cClient, "read_float", rb_readFloatValue, 2);
+    rb_define_method(cClient, "read_double", rb_readDoubleValue, 2);
     rb_define_method(cClient, "read_boolean", rb_readBooleanValue, 2);
     rb_define_method(cClient, "read_bool", rb_readBooleanValue, 2);
+    rb_define_method(cClient, "read_string", rb_readStringValue, 2);
 
+    // Array read methods
+    rb_define_method(cClient, "read_byte_array", rb_readByteArrayValue, 2);
+    rb_define_method(cClient, "read_sbyte_array", rb_readSByteArrayValue, 2);
+    rb_define_method(cClient, "read_int16_array", rb_readInt16ArrayValue, 2);
+    rb_define_method(cClient, "read_uint16_array", rb_readUInt16ArrayValue, 2);
+    rb_define_method(cClient, "read_int32_array", rb_readInt32ArrayValue, 2);
+    rb_define_method(cClient, "read_uint32_array", rb_readUInt32ArrayValue, 2);
+    rb_define_method(cClient, "read_int64_array", rb_readInt64ArrayValue, 2);
+    rb_define_method(cClient, "read_uint64_array", rb_readUInt64ArrayValue, 2);
+    rb_define_method(cClient, "read_float_array", rb_readFloatArrayValue, 2);
+    rb_define_method(cClient, "read_double_array", rb_readDoubleArrayValue, 2);
+    rb_define_method(cClient, "read_boolean_array", rb_readBooleanArrayValue, 2);
+    rb_define_method(cClient, "read_bool_array", rb_readBooleanArrayValue, 2);
+    rb_define_method(cClient, "read_string_array", rb_readStringArrayValue, 2);
+
+    rb_define_method(cClient, "write_byte", rb_writeByteValue, 3);
+    rb_define_method(cClient, "write_sbyte", rb_writeSByteValue, 3);
     rb_define_method(cClient, "write_int16", rb_writeInt16Value, 3);
     rb_define_method(cClient, "write_uint16", rb_writeUInt16Value, 3);
     rb_define_method(cClient, "write_int32", rb_writeInt32Value, 3);
     rb_define_method(cClient, "write_uint32", rb_writeUInt32Value, 3);
+    rb_define_method(cClient, "write_int64", rb_writeInt64Value, 3);
+    rb_define_method(cClient, "write_uint64", rb_writeUInt64Value, 3);
     rb_define_method(cClient, "write_float", rb_writeFloatValue, 3);
+    rb_define_method(cClient, "write_double", rb_writeDoubleValue, 3);
     rb_define_method(cClient, "write_boolean", rb_writeBooleanValue, 3);
     rb_define_method(cClient, "write_bool", rb_writeBooleanValue, 3);
+    rb_define_method(cClient, "write_string", rb_writeStringValue, 3);
 
+    // Array write methods
+    rb_define_method(cClient, "write_byte_array", rb_writeByteArrayValue, 3);
+    rb_define_method(cClient, "write_sbyte_array", rb_writeSByteArrayValue, 3);
+    rb_define_method(cClient, "write_int16_array", rb_writeInt16ArrayValue, 3);
+    rb_define_method(cClient, "write_uint16_array", rb_writeUInt16ArrayValue, 3);
+    rb_define_method(cClient, "write_int32_array", rb_writeInt32ArrayValue, 3);
+    rb_define_method(cClient, "write_uint32_array", rb_writeUInt32ArrayValue, 3);
+    rb_define_method(cClient, "write_int64_array", rb_writeInt64ArrayValue, 3);
+    rb_define_method(cClient, "write_uint64_array", rb_writeUInt64ArrayValue, 3);
+    rb_define_method(cClient, "write_float_array", rb_writeFloatArrayValue, 3);
+    rb_define_method(cClient, "write_double_array", rb_writeDoubleArrayValue, 3);
+    rb_define_method(cClient, "write_boolean_array", rb_writeBooleanArrayValue, 3);
+    rb_define_method(cClient, "write_bool_array", rb_writeBooleanArrayValue, 3);
+    rb_define_method(cClient, "write_string_array", rb_writeStringArrayValue, 3);
+
+    // Array write methods
+    rb_define_method(cClient, "write_byte_array", rb_writeByteArrayValue, 3);
+    rb_define_method(cClient, "write_sbyte_array", rb_writeSByteArrayValue, 3);
+    rb_define_method(cClient, "write_int16_array", rb_writeInt16ArrayValue, 3);
+    rb_define_method(cClient, "write_uint16_array", rb_writeUInt16ArrayValue, 3);
+    rb_define_method(cClient, "write_int32_array", rb_writeInt32ArrayValue, 3);
+    rb_define_method(cClient, "write_uint32_array", rb_writeUInt32ArrayValue, 3);
+    rb_define_method(cClient, "write_int64_array", rb_writeInt64ArrayValue, 3);
+    rb_define_method(cClient, "write_uint64_array", rb_writeUInt64ArrayValue, 3);
+    rb_define_method(cClient, "write_float_array", rb_writeFloatArrayValue, 3);
+    rb_define_method(cClient, "write_double_array", rb_writeDoubleArrayValue, 3);
+    rb_define_method(cClient, "write_boolean_array", rb_writeBooleanArrayValue, 3);
+    rb_define_method(cClient, "write_bool_array", rb_writeBooleanArrayValue, 3);
+    rb_define_method(cClient, "write_string_array", rb_writeStringArrayValue, 3);
+
+    rb_define_method(cClient, "multi_write_byte", rb_writeByteValues, 3);
+    rb_define_method(cClient, "multi_write_sbyte", rb_writeSByteValues, 3);
     rb_define_method(cClient, "multi_write_int16", rb_writeInt16Values, 3);
     rb_define_method(cClient, "multi_write_uint16", rb_writeUInt16Values, 3);
     rb_define_method(cClient, "multi_write_int32", rb_writeInt32Values, 3);
     rb_define_method(cClient, "multi_write_uint32", rb_writeUInt32Values, 3);
+    rb_define_method(cClient, "multi_write_int64", rb_writeInt64Values, 3);
+    rb_define_method(cClient, "multi_write_uint64", rb_writeUInt64Values, 3);
     rb_define_method(cClient, "multi_write_float", rb_writeFloatValues, 3);
+    rb_define_method(cClient, "multi_write_double", rb_writeDoubleValues, 3);
     rb_define_method(cClient, "multi_write_boolean", rb_writeBooleanValues, 3);
     rb_define_method(cClient, "multi_write_bool", rb_writeBooleanValues, 3);
 
