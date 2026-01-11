@@ -15,10 +15,6 @@ if GC.respond_to?(:verify_compaction_references)
   end
 end
 
-def new_client(connect: true)
-  OPCUAClient::Client.new
-end
-
 RSpec.configure do |config|
   config.raise_errors_for_deprecations!
   config.disable_monkey_patching!
