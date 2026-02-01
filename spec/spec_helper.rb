@@ -12,6 +12,17 @@ if GC.respond_to?(:verify_compaction_references)
     GC.verify_compaction_references(expand_heap: true, toward: :empty)
   else
     GC.verify_compaction_references(toward: :empty)
+end
+
+# Load test server helper
+require_relative 'support/test_server_helper'
+
+def new_client(connect: true)
+  client = OPCUAClient::Client.new
+
+  if connect
+    # Connect to test server
+    client.connect(TestServerHelper.server_url)
   end
 end
 
