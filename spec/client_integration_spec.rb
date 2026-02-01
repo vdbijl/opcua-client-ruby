@@ -1,45 +1,10 @@
 # frozen_string_literal: true
 
 RSpec.describe 'OPC UA Client Integration Tests', type: :feature do
-  let(:server_port)  { 4840 }
-  let(:endpoint_url) { "opc.tcp://127.0.0.1:#{server_port}" }
-  let(:namespace_id) { 5 }
+  let(:endpoint_url) { TestServerHelper.server_url }
+  let(:namespace_id) { TestServerHelper.test_namespace }
   let(:client)       { OPCUAClient::Client.new }
   let(:connected_client) { client.connect(endpoint_url) }
-
-  # Start the server against which we test
-  # rubocop:disable RSpec/InstanceVariable
-  def start_server
-    # Start the test server
-    server_path = File.expand_path('../tools/server/server', __dir__)
-    skip 'Test server not built. Run: make -C tools/server/ clean all' unless File.exist?(server_path)
-
-    @server_pid = spawn(server_path, out: '/dev/null', err: '/dev/null')
-
-    # Give the server time to start
-    deadline = Time.now + 1
-    until Time.now > deadline
-      begin
-        Process.getpgid(@server_pid)
-      rescue Errno::ESRCH => _e
-        sleep 0.01
-      end
-    end
-
-    # Verify server is running
-    skip 'Failed to start test server' unless Process.getpgid(@server_pid)
-  end
-
-  # Stop the test server
-  def stop_server
-    # puts "Server stopping: #{@server_pid}"
-    return unless @server_pid
-
-    Process.kill('TERM', @server_pid)
-    Process.wait(@server_pid)
-    # puts 'Server stopped'
-  end
-  # rubocop:enable RSpec/InstanceVariable
 
   # String values
   def reset_string_server_values
@@ -87,16 +52,6 @@ RSpec.describe 'OPC UA Client Integration Tests', type: :feature do
     client.write_uint32_array(namespace_id, 'uint32_array', [100, 200, 300])
     client.write_double_array(namespace_id, 'double_array', [1.111, 2.222, 3.333, 4.444])
   end
-
-  # rubocop:disable RSpec/BeforeAfterAll
-  before(:all) do
-    start_server
-  end
-
-  after(:all) do
-    stop_server
-  end
-  # rubocop:enable RSpec/BeforeAfterAll
 
   context 'with String operations' do
     before { connected_client }
@@ -167,7 +122,11 @@ RSpec.describe 'OPC UA Client Integration Tests', type: :feature do
 
   describe 'with (u)int operations' do
     before { connected_client }
-    after  { reset_uint32_server_values }
+
+    after do
+      reset_uint32_server_values
+      client.disconnect
+    end
 
     it 'reads uint32 values' do
       expect(client.read_uint32(namespace_id, 'uint32a')).to eq(0)
@@ -208,6 +167,10 @@ RSpec.describe 'OPC UA Client Integration Tests', type: :feature do
 
   context 'with Float operations' do
     before { connected_client }
+
+    after do
+      client.disconnect
+    end
 
     describe '#read_float' do
       it 'reads float zero value' do
@@ -252,7 +215,11 @@ RSpec.describe 'OPC UA Client Integration Tests', type: :feature do
 
   context 'with Byte operations' do
     before { connected_client }
-    after  { reset_byte_server_values }
+
+    after do
+      reset_byte_server_values
+      client.disconnect
+    end
 
     describe '#read_byte' do
       it 'reads byte zero value' do
@@ -325,6 +292,10 @@ RSpec.describe 'OPC UA Client Integration Tests', type: :feature do
   context 'with Double operations' do
     before { connected_client }
 
+    after do
+      client.disconnect
+    end
+
     it 'reads double zero value' do
       value = client.read_double(namespace_id, 'double_zero')
       expect(value).to be_a(Float)
@@ -388,7 +359,11 @@ RSpec.describe 'OPC UA Client Integration Tests', type: :feature do
 
   describe 'Array operations' do
     before { connected_client }
-    after  { reset_array_server_values }
+
+    after do
+      reset_array_server_values
+      client.disconnect
+    end
 
     it 'reads an int32 array' do
       value = client.read_int32_array(namespace_id, 'int32_array')

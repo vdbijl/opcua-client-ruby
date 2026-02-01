@@ -15,6 +15,18 @@ if GC.respond_to?(:verify_compaction_references)
   end
 end
 
+# Load test server helper
+require_relative 'support/test_server_helper'
+
+def new_client(connect: true)
+  client = OPCUAClient::Client.new
+
+  return unless connect
+
+  # Connect to test server
+  client.connect(TestServerHelper.server_url)
+end
+
 RSpec.configure do |config|
   config.raise_errors_for_deprecations!
   config.disable_monkey_patching!
@@ -28,5 +40,19 @@ RSpec.configure do |config|
   config.mock_with :rspec do |mocks|
     mocks.verify_partial_doubles = true
     mocks.verify_doubled_constant_names = true
+  end
+
+  # Start server before all tests
+  config.before(:suite) do
+    # puts "\n🚀 Starting OPC UA test server..."
+    TestServerHelper.start_server
+    # puts "✅ Test server running at #{TestServerHelper.server_url}\n"
+  end
+
+  # Stop server after all tests
+  config.after(:suite) do
+    # puts "\n🛑 Stopping OPC UA test server..."
+    TestServerHelper.stop_server
+    # puts "✅ Test server stopped\n"
   end
 end

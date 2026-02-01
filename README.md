@@ -164,6 +164,15 @@ end
 * ```after_session_created```
 * ```after_data_changed```
 
+## Documentation
+
+For detailed documentation on the project, including update guides, fixes, and test infrastructure, see the [docs/](docs/) directory.
+
+Key documents:
+- [open62541 v1.4.14 Update](docs/completed/open62541-update/OPEN62541_V1.4.14_UPDATE_COMPLETE.md) - Library update summary
+- [Test Infrastructure](docs/completed/tests/TEST_INFRASTRUCTURE_SETUP.md) - Testing setup and usage
+- [Documentation Index](docs/README.md) - Complete documentation index
+
 ## Contribute
 
 ### Set up
