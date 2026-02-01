@@ -44,15 +44,15 @@ RSpec.configure do |config|
 
   # Start server before all tests
   config.before(:suite) do
-    puts "\n🚀 Starting OPC UA test server..."
+    # puts "\n🚀 Starting OPC UA test server..."
     TestServerHelper.start_server
-    puts "✅ Test server running at #{TestServerHelper.server_url}\n"
+    # puts "✅ Test server running at #{TestServerHelper.server_url}\n"
   end
 
   # Stop server after all tests
   config.after(:suite) do
-    puts "\n🛑 Stopping OPC UA test server..."
+    # puts "\n🛑 Stopping OPC UA test server..."
     TestServerHelper.stop_server
-    puts "✅ Test server stopped\n"
+    # puts "✅ Test server stopped\n"
   end
 end
